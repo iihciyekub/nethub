@@ -1,0 +1,8 @@
+node_modules/
+downloads/
+.nethub-profile/
+nethub.config.json
+download-results.json
+failed-dois.txt
+*.tmp
+.DS_Store

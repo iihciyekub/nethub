@@ -1,0 +1,27 @@
+{
+  "sources": [
+    {
+      "name": "primary",
+      "baseUrl": "https://www.sci-hub.ru",
+      "enabled": true
+    },
+    {
+      "name": "backup",
+      "baseUrl": "https://www.sci-hub.jp",
+      "enabled": false
+    }
+  ],
+  "source": "primary",
+  "downloadDir": "./downloads",
+  "concurrency": 3,
+  "retries": 1,
+  "timeout": 10000,
+  "verificationTimeout": 180000,
+  "profileDir": "",
+  "headless": true,
+  "skipExisting": true,
+  "windowX": 80,
+  "windowY": 80,
+  "windowWidth": 1200,
+  "windowHeight": 900
+}

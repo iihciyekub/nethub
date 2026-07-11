@@ -1,0 +1,33 @@
+{
+  "name": "nethub",
+  "version": "0.0.1",
+  "description": "Browser-assisted DOI PDF downloader",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iihciyekub/nethub.git"
+  },
+  "homepage": "https://github.com/iihciyekub/nethub#readme",
+  "bugs": {
+    "url": "https://github.com/iihciyekub/nethub/issues"
+  },
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "nethub": "./bin/nethub.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "nethub.config.example.json"
+  ],
+  "scripts": {
+    "check": "node --check bin/nethub.js && node --check src/*.js && node --check test/*.test.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "playwright": "1.59.1"
+  }
+}

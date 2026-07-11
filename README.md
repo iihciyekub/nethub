@@ -1,0 +1,195 @@
+# netHub
+
+轻量、可恢复的 DOI PDF 批量下载 CLI。后台运行，遇到验证码时才弹出浏览器，并支持多个下载源自动切换。
+
+A lightweight, resilient CLI for batch-downloading DOI PDFs. It stays in the background, opens a browser only when verification is required, and automatically falls back between download sources.
+
+[中文](#中文) · [English](#english)
+
+> 请只下载你有权访问的资料，并遵守下载源的服务条款及当地法律。
+>
+> Download only material you are authorized to access, and follow the source service's terms and applicable law.
+
+## 中文
+
+### 功能特点
+
+- 默认使用无头 Chromium 在后台下载。
+- 检测到 CAPTCHA 或浏览器验证时，自动弹出一个可见窗口；完成验证后继续后台任务。
+- 默认 3 个并发页面，可配置为 1–4 个；所有页面共享登录状态和 Cookie。
+- 支持多个下载源，当前源异常时自动尝试下一个。
+- 支持命令行 DOI、DOI URL、TXT、CSV 和混合文本输入。
+- 可指定下载目录，自动跳过已有 PDF，也可以强制覆盖。
+- 写入 JSON 结果摘要和失败 DOI 清单，方便继续处理。
+- 内置 `nethub update` 在线升级。
+
+### 环境要求
+
+- Node.js 20 或更高版本
+- 可以访问 GitHub
+- 一个或多个你有权使用、并能通过 DOI 页面提供 PDF 链接的下载源
+
+### 安装
+
+```sh
+npm install --global github:iihciyekub/nethub
+npx playwright install chromium
+```
+
+确认安装：
+
+```sh
+nethub --help
+```
+
+### 配置下载源
+
+复制示例配置到当前工作目录：
+
+```sh
+cp nethub.config.example.json nethub.config.json
+```
+
+编辑 `nethub.config.json`：
+
+```json
+{
+  "downloadDir": "./downloads",
+  "concurrency": 3,
+  "retries": 1,
+  "sources": [
+    { "name": "primary", "baseUrl": "https://service-a.example" },
+    { "name": "backup", "baseUrl": "https://service-b.example" }
+  ]
+}
+```
+
+下载源按照配置顺序尝试。可用 `"enabled": false` 暂时停用某个源，或用 `--source backup` 将指定源临时移到第一位。旧版单个 `baseUrl` 配置仍然兼容。
+
+### 使用
+
+```sh
+# 下载一个或多个 DOI
+nethub download 10.1000/example 10.1000/another
+
+# 从文件中提取 DOI
+nethub download --input dois.txt --input records.csv
+
+# 指定目录和并发数
+nethub download --download-dir ~/Downloads/papers --concurrency 4 10.1000/example
+
+# 临时使用单个下载源
+nethub download --base-url https://service.example 10.1000/example
+
+# 优先使用某个已配置的源，失败后仍会自动使用其他源
+nethub download --source backup --input dois.txt
+```
+
+通常不需要 `--show`。netHub 会保持后台运行，只在检测到验证页面时弹出窗口。如果希望观察完整过程，可使用：
+
+```sh
+nethub download --show --profile-dir ~/.nethub-profile 10.1000/example
+```
+
+### 升级
+
+```sh
+# 只检查新版本
+nethub update --check
+
+# 安装最新 GitHub Release
+nethub update
+```
+
+### 输出文件
+
+下载目录中除了 PDF，还会生成：
+
+- `download-results.json`：请求、结果、实际下载源、失败原因和有效配置。
+- `failed-dois.txt`：每行一个失败 DOI，便于重新下载。
+
+## English
+
+### Highlights
+
+- Runs headless Chromium in the background by default.
+- Opens one visible window only when a CAPTCHA or browser challenge is detected, then returns to background downloading.
+- Uses 3 concurrent pages by default, configurable from 1 to 4; pages share cookies and login state.
+- Automatically tries the next configured source when the current source fails.
+- Accepts DOI arguments, DOI URLs, TXT, CSV, and mixed-text input files.
+- Supports a custom output directory, existing-file skipping, and forced replacement.
+- Produces a JSON run summary and a retry-friendly failed DOI list.
+- Includes self-update commands through `nethub update`.
+
+### Requirements
+
+- Node.js 20 or newer
+- GitHub access
+- One or more authorized services that expose a PDF link from a DOI page
+
+### Install
+
+```sh
+npm install --global github:iihciyekub/nethub
+npx playwright install chromium
+nethub --help
+```
+
+### Configure sources
+
+Copy `nethub.config.example.json` to `nethub.config.json`, then edit the ordered source list:
+
+```json
+{
+  "downloadDir": "./downloads",
+  "concurrency": 3,
+  "retries": 1,
+  "sources": [
+    { "name": "primary", "baseUrl": "https://service-a.example" },
+    { "name": "backup", "baseUrl": "https://service-b.example" }
+  ]
+}
+```
+
+Sources are tried in order. Set `"enabled": false` to keep a source configured but inactive. Use `--source backup` to try a named source first while retaining the remaining fallbacks. The legacy single `baseUrl` setting remains supported.
+
+### Usage
+
+```sh
+nethub download 10.1000/example 10.1000/another
+nethub download --input dois.txt --input records.csv
+nethub download --download-dir ~/Downloads/papers --concurrency 4 10.1000/example
+nethub download --base-url https://service.example 10.1000/example
+nethub download --source backup --input dois.txt
+```
+
+The browser remains hidden unless verification is detected. Use `--show` to watch the entire run, and `--profile-dir` to preserve a login profile.
+
+### Update
+
+```sh
+nethub update --check
+nethub update
+```
+
+`--check` reports the latest GitHub Release without changing the installation. `nethub update` installs that tagged release globally through npm.
+
+### Output
+
+- `download-results.json` contains requested values, per-item status, selected source, errors, and effective settings.
+- `failed-dois.txt` contains one failed DOI per line for easy retries.
+
+## Development
+
+```sh
+npm install
+npx playwright install chromium
+npm test
+npm run check
+```
+
+Tests use local fixtures and do not contact a real download source.
+
+## License
+
+[MIT](LICENSE)
