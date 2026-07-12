@@ -13,7 +13,7 @@ Usage:
 
 Options:
   --config FILE                Config file (default: ./nethub.config.json)
-  --base-url URL               Use one target URL (overrides configured sources)
+  --base-url URL               Use one target URL (default: https://doi.org)
   --source NAME                Try this configured source first
   --download-dir DIR           Output directory (default: ./downloads)
   --input FILE                 Extract DOIs from all file text; repeatable
