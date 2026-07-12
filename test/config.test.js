@@ -32,19 +32,18 @@ test('settings use doi.org by default and reject invalid integers', () => {
   const defaults = resolveSettings({}, {}, {}, '/tmp');
   assert.deepEqual(defaults.sources, [{ name: 'doi.org', baseUrl: 'https://doi.org' }]);
   assert.equal(defaults.retries, 0);
-  assert.equal(defaults.linkTimeout, 2000);
+  assert.equal(defaults.timeout, 3000);
+  assert.equal(defaults.linkTimeout, 500);
   assert.throws(() => resolveSettings({ baseUrl: 'https://example.test', retries: '-1' }, {}, {}, '/tmp'), /retries/);
   assert.throws(() => resolveSettings({ baseUrl: 'https://example.test', retries: '3' }, {}, {}, '/tmp'), /retries/);
   assert.throws(() => resolveSettings({ baseUrl: 'https://example.test', linkTimeout: '0' }, {}, {}, '/tmp'), /link timeout/);
   assert.throws(() => resolveSettings({ baseUrl: 'https://example.test', concurrency: '5' }, {}, {}, '/tmp'), /concurrency/);
 });
 
-test('fast mode uses short waits unless explicitly overridden', () => {
-  const fast = resolveSettings({ fast: true }, { timeout: 20000, linkTimeout: 9000, retries: 2 }, {}, '/tmp');
-  assert.equal(fast.timeout, 3000);
-  assert.equal(fast.linkTimeout, 500);
-  assert.equal(fast.retries, 0);
-  assert.equal(resolveSettings({ fast: true, timeout: '4000' }, {}, {}, '/tmp').timeout, 4000);
+test('explicit CLI timeouts override configured defaults', () => {
+  const settings = resolveSettings({ timeout: '4000', linkTimeout: '800' }, { timeout: 20000, linkTimeout: 9000 }, {}, '/tmp');
+  assert.equal(settings.timeout, 4000);
+  assert.equal(settings.linkTimeout, 800);
 });
 
 test('configured sources are validated and preferred source moves first', () => {

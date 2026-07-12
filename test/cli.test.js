@@ -19,10 +19,6 @@ test('source selects the preferred configured source', () => {
   assert.equal(parseArgs(['download', '--source', 'backup', '10.1/x']).source, 'backup');
 });
 
-test('fast mode is accepted for quick source probing', () => {
-  assert.equal(parseArgs(['download', '--fast', '10.1/x']).fast, true);
-});
-
 test('update command supports check-only mode', () => {
   assert.deepEqual(parseArgs(['update']), { command: 'update', check: false });
   assert.deepEqual(parseArgs(['update', '--check']), { command: 'update', check: true });
