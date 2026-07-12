@@ -94,6 +94,20 @@ async function loadedPdfUrl(page, navigation, observedPdfUrl = '') {
   return viewerOpen === true && /^https?:/i.test(page.url()) ? page.url() : '';
 }
 
+function verificationPages(page) {
+  const pages = page.context?.().pages?.() || [];
+  return pages.includes(page) ? pages : [page, ...pages];
+}
+
+async function loadedVerificationPdfUrl(page, observedPdfUrl = '') {
+  if (observedPdfUrl) return observedPdfUrl;
+  for (const candidate of verificationPages(page)) {
+    const url = await loadedPdfUrl(candidate, null);
+    if (url) return url;
+  }
+  return '';
+}
+
 function unavailableTextReason(text) {
   const unavailable = [
     /the\s+following\s+(?:paper|article)\s+is\s+not\s+yet\s+available\s+in\s+(?:my|our|the)\s+database/i,
@@ -174,13 +188,14 @@ function abortableDelay(timeout, signal) {
   });
 }
 
-async function waitForAutomaticVerification(page, timeout, signal, pollInterval = 500) {
+async function waitForAutomaticVerification(page, timeout, signal, pollInterval = 500, getObservedPdfUrl = () => '') {
   const deadline = Date.now() + timeout;
   let sawHumanCheck = false;
   let stablePasses = 0;
   while (Date.now() < deadline && !signal?.aborted) {
-    if (await loadedPdfUrl(page, null)) return true;
-    const needsHuman = await requiresHumanInteraction(page);
+    if (await loadedVerificationPdfUrl(page, getObservedPdfUrl())) return true;
+    const pages = verificationPages(page);
+    const needsHuman = (await Promise.all(pages.map((candidate) => requiresHumanInteraction(candidate)))).some(Boolean);
     if (needsHuman) {
       sawHumanCheck = true;
       stablePasses = 0;
@@ -198,7 +213,9 @@ async function waitForVerification(page, timeout, doi, io = process) {
   if (io.stdin?.isTTY) {
     io.stderr.write(`[${doi}] complete verification in the browser; continuation is automatic, or press Enter to continue manually.\n`);
     const controller = new AbortController();
-    const automatic = waitForAutomaticVerification(page, timeout, controller.signal, io.pollInterval || 500)
+    const automatic = waitForAutomaticVerification(
+      page, timeout, controller.signal, io.pollInterval || 500, io.getObservedPdfUrl,
+    )
       .then((confirmed) => ({ mode: 'automatic', confirmed }));
     const manual = waitForUserConfirmation(io.stdin, timeout, controller.signal)
       .then((confirmed) => ({ mode: 'manual', confirmed }));
@@ -209,7 +226,7 @@ async function waitForVerification(page, timeout, doi, io = process) {
     }
     return result.confirmed;
   }
-  return waitForAutomaticVerification(page, timeout);
+  return waitForAutomaticVerification(page, timeout, null, 500, io.getObservedPdfUrl);
 }
 
 async function copyBrowserState(fromContext, toContext) {
@@ -287,6 +304,7 @@ function createVerificationHandler(primaryContext, settings, chromiumApi = chrom
       let verificationContext;
       let close;
       let verifiedPdfUrl = '';
+      let observedPdfUrl = '';
       if (settings.profileDir) {
         verificationContext = await chromiumApi.launchPersistentContext(`${settings.profileDir}-verification`, launch);
         close = () => verificationContext.close();
@@ -298,16 +316,20 @@ function createVerificationHandler(primaryContext, settings, chromiumApi = chrom
 
       try {
         await copyBrowserState(primaryContext, verificationContext);
-        const page = await verificationContext.newPage();
-        let observedPdfUrl = '';
-        page.on?.('response', (response) => {
+        const observePdfResponse = (response) => {
           const url = pdfUrlFromResponse(response);
           if (url) observedPdfUrl = url;
-        });
+        };
+        verificationContext.on?.('response', observePdfResponse);
+        const page = await verificationContext.newPage();
+        page.on?.('response', observePdfResponse);
         await positionWindow(verificationContext, page, { ...settings, headless: false });
         const navigation = await page.goto(blockedPage.url(), { waitUntil: 'domcontentloaded', timeout: settings.timeout }).catch(() => null);
-        if (!await waitForVerification(page, settings.verificationTimeout, doi)) return false;
-        verifiedPdfUrl = await loadedPdfUrl(page, navigation, observedPdfUrl);
+        if (!await waitForVerification(page, settings.verificationTimeout, doi, {
+          stdin: process.stdin, stderr: process.stderr, getObservedPdfUrl: () => observedPdfUrl,
+        })) return false;
+        verifiedPdfUrl = await loadedVerificationPdfUrl(page, observedPdfUrl)
+          || await loadedPdfUrl(page, navigation, observedPdfUrl);
         await copyBrowserState(verificationContext, primaryContext);
       } finally {
         await close().catch(() => {});
@@ -555,4 +577,4 @@ async function runBatch(context, dois, settings, operation = downloadOne) {
   return results;
 }
 
-module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, findDownloadUrls, isBlocked, isHumanVerificationText, launchContext, loadedPdfUrl, pdfUrlFromResponse, requiresHumanInteraction, runBatch, safeFileName, savePdfFromContext, unavailablePageReason, unavailableTextReason, validatePdf, waitForAutomaticVerification, waitForUserConfirmation, waitForVerification };
+module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, findDownloadUrls, isBlocked, isHumanVerificationText, launchContext, loadedPdfUrl, loadedVerificationPdfUrl, pdfUrlFromResponse, requiresHumanInteraction, runBatch, safeFileName, savePdfFromContext, unavailablePageReason, unavailableTextReason, validatePdf, waitForAutomaticVerification, waitForUserConfirmation, waitForVerification };

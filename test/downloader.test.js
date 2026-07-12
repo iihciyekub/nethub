@@ -211,11 +211,36 @@ test('automatic verification recognizes a PDF opened in the browser', async () =
   assert.equal(await waitForAutomaticVerification(page, 100), true);
 });
 
+test('automatic verification scans PDF viewers opened in another tab', async () => {
+  const challenge = verificationPage({ blocked: true });
+  const pdf = verificationPage({ blocked: false });
+  pdf.evaluate = async () => true;
+  pdf.url = () => 'https://example.test/paper.pdf';
+  const context = { pages: () => [challenge, pdf] };
+  challenge.context = () => context;
+  pdf.context = () => context;
+  assert.equal(await waitForAutomaticVerification(challenge, 100), true);
+});
+
+test('automatic verification accepts a PDF response while the challenge tab remains open', async () => {
+  const page = verificationPage({ blocked: true });
+  let observedPdfUrl = '';
+  setTimeout(() => { observedPdfUrl = 'https://example.test/paper'; }, 20);
+  assert.equal(await waitForAutomaticVerification(page, 500, null, 10, () => observedPdfUrl), true);
+});
+
 test('a real browser continues after a verification page navigates away', async (t) => {
   const server = http.createServer((req, res) => {
+    if (req.url === '/paper.pdf') {
+      res.writeHead(200, { 'content-type': 'application/pdf' });
+      return res.end('%PDF-1.7\nverification popup fixture');
+    }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     if (req.url === '/challenge') {
       return res.end('<title>Verify you are human</title><body>あなたはロボットですか？<script>setTimeout(() => location.href = "/article", 100)</script></body>');
+    }
+    if (req.url === '/popup') {
+      return res.end('<title>Verify you are human</title><body>あなたはロボットですか？<script>setTimeout(() => window.open("/paper.pdf", "_blank"), 100)</script></body>');
     }
     res.end('<title>Article</title><body>Article ready</body>');
   });
@@ -227,6 +252,14 @@ test('a real browser continues after a verification page navigates away', async 
   await page.goto(`http://127.0.0.1:${server.address().port}/challenge`);
   assert.equal(await waitForAutomaticVerification(page, 2000, null, 50), true);
   assert.match(page.url(), /\/article$/);
+
+  let observedPdfUrl = '';
+  page.context().on('response', (response) => {
+    observedPdfUrl ||= pdfUrlFromResponse(response);
+  });
+  await page.goto(`http://127.0.0.1:${server.address().port}/popup`);
+  assert.equal(await waitForAutomaticVerification(page, 2000, null, 50, () => observedPdfUrl), true);
+  assert.match(observedPdfUrl, /\/paper\.pdf$/);
 });
 
 test('ordinary missing PDF link fails without manual review', async () => {
