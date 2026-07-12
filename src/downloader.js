@@ -47,11 +47,18 @@ function validatePdf(buffer, contentType = '') {
 }
 
 async function savePdfFromContext(context, url, outputPath, referer, timeout) {
-  const response = await context.request.get(url, {
-    timeout,
-    maxRedirects: 5,
-    headers: { accept: 'application/pdf,*/*;q=0.8', referer },
-  });
+  let response;
+  try {
+    response = await context.request.get(url, {
+      timeout,
+      maxRedirects: 5,
+      headers: { accept: 'application/pdf,*/*;q=0.8', referer },
+    });
+  } catch (error) {
+    error.code = /timeout/i.test(error.message) ? 'PDF_DOWNLOAD_TIMEOUT' : 'PDF_DOWNLOAD_FAILED';
+    error.retryable = true;
+    throw error;
+  }
   if (!response.ok()) {
     const status = response.status();
     throw downloadError(`HTTP_${status}`, `HTTP ${status} ${response.statusText()}`, status === 429 || status >= 500);
@@ -194,7 +201,7 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
     const downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
     if (!downloadUrl) throw downloadError('PDF_LINK_NOT_FOUND', 'PDF download link not found');
     const outputPath = path.join(settings.downloadDir, safeFileName(doi));
-    await savePdfFromContext(context, downloadUrl, outputPath, page.url(), settings.timeout);
+    await savePdfFromContext(context, downloadUrl, outputPath, page.url(), settings.downloadTimeout ?? settings.timeout);
     return { doi, ok: true, path: outputPath, source: source.name };
   } finally { await page.close().catch(() => {}); }
 }

@@ -46,6 +46,14 @@ test('context request follows redirects, reuses cookies, and atomically saves a 
   assert.deepEqual((await fs.readdir(directory)).sort(), ['paper.pdf']);
 });
 
+test('PDF transfer timeout is classified as transient', async () => {
+  const context = { request: { get: async () => { throw new Error('Timeout 50ms exceeded'); } } };
+  await assert.rejects(
+    () => savePdfFromContext(context, 'https://example.test/paper.pdf', '/tmp/unused.pdf', 'https://example.test', 50),
+    (error) => error.code === 'PDF_DOWNLOAD_TIMEOUT' && error.retryable === true,
+  );
+});
+
 test('retry reports attempts and force/skip behavior', async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'nethub-retry-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));

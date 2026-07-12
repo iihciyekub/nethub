@@ -19,8 +19,9 @@ Options:
   --input FILE                 Extract DOIs from all file text; repeatable
   --concurrency N              Concurrent workers (default: 3)
   --retries N                  Extra retry rounds (default: 0)
-  --timeout MS                 Navigation and download timeout (default: 3000)
-  --link-timeout MS            PDF link detection wait (default: 500)
+  --timeout MS                 Page navigation timeout (default: 8000)
+  --link-timeout MS            PDF link detection wait (default: 2500)
+  --download-timeout MS        Confirmed PDF transfer timeout (default: 60000)
   --verification-timeout MS    Manual verification wait (default: 180000)
   --profile-dir DIR            Persistent Chromium profile
   --force                      Replace an existing DOI PDF
@@ -51,6 +52,7 @@ function parseArgs(argv) {
     ['--config', 'configPath'], ['--base-url', 'baseUrl'], ['--download-dir', 'downloadDir'],
     ['--source', 'source'],
     ['--concurrency', 'concurrency'], ['--retries', 'retries'], ['--timeout', 'timeout'], ['--link-timeout', 'linkTimeout'],
+    ['--download-timeout', 'downloadTimeout'],
     ['--verification-timeout', 'verificationTimeout'], ['--profile-dir', 'profileDir'],
     ['--window-x', 'windowX'], ['--window-y', 'windowY'],
   ]);

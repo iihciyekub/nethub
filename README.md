@@ -73,8 +73,9 @@ export NETHUB_CONFIG=/absolute/path/to/nethub.config.json
   "downloadDir": "./downloads",
   "concurrency": 3,
   "retries": 0,
-  "timeout": 3000,
-  "linkTimeout": 500,
+  "timeout": 8000,
+  "linkTimeout": 2500,
+  "downloadTimeout": 60000,
   "sources": [
     { "name": "primary", "baseUrl": "https://service-a.example" },
     { "name": "backup", "baseUrl": "https://service-b.example" }
@@ -102,7 +103,7 @@ nethub download --base-url https://service.example 10.1000/example
 # 优先使用某个已配置的源，失败后仍会自动使用其他源
 nethub download --source backup --input dois.txt
 
-# 默认即为快速判断：3 秒导航、0.5 秒链接探测、不重试
+# 默认使用分阶段自适应等待，不额外重试
 nethub download --json "10.1000/example"
 ```
 
@@ -135,7 +136,7 @@ nethub update
 - `download-results.json`：请求、结果、实际下载源、失败原因和有效配置。
 - `failed-dois.txt`：每行一个失败 DOI，便于重新下载。
 
-默认模式就是快速判断：导航最多等待 3 秒，PDF 链接最多额外探测 0.5 秒，每个下载源只尝试一次。明确的页面不存在、找不到 PDF 链接或返回内容不是 PDF 时不会重复尝试；所有来源均失败后，JSON 结果会使用 `"status": "source_not_found"`。只有网络超时、限流或服务器错误等暂时性问题才允许通过 `--retries 1` 再试，额外重试轮数最多为 2。少数慢站点可显式调大 `--timeout` 和 `--link-timeout`。
+默认使用分阶段自适应等待：网页导航最多 8 秒，动态 PDF 链接最多额外探测 2.5 秒；一旦链接出现就立即继续。确认 PDF 链接后，文件传输最多允许 60 秒，避免慢速网络把可下载文献误判为失败。每个下载源仍只尝试一次，明确的页面不存在、找不到 PDF 链接或返回内容不是 PDF 时不会重复尝试；所有来源均失败后，JSON 结果使用 `"status": "source_not_found"`。只有暂时性问题才允许通过 `--retries 1` 再试，额外重试轮数最多为 2。
 
 ## English
 
@@ -174,8 +175,9 @@ netHub works without a config file by resolving through `https://doi.org`. Confi
   "downloadDir": "./downloads",
   "concurrency": 3,
   "retries": 0,
-  "timeout": 3000,
-  "linkTimeout": 500,
+  "timeout": 8000,
+  "linkTimeout": 2500,
+  "downloadTimeout": 60000,
   "sources": [
     { "name": "primary", "baseUrl": "https://service-a.example" },
     { "name": "backup", "baseUrl": "https://service-b.example" }
@@ -218,7 +220,7 @@ nethub update
 - `download-results.json` contains requested values, per-item status, selected source, errors, and effective settings.
 - `failed-dois.txt` contains one failed DOI per line for easy retries.
 
-The default mode is the fast path: a 3-second navigation, a 500-millisecond PDF-link probe, and one attempt per source. Definitive failures such as a missing page, no PDF link, or non-PDF content are not retried. When every source fails, the result uses `"status": "source_not_found"`. Only transient network, rate-limit, or server failures are eligible for `--retries`; extra retry rounds are capped at 2. For an unusually slow site, explicitly increase `--timeout` and `--link-timeout`.
+The default mode uses staged adaptive limits: up to 8 seconds for page navigation and 2.5 seconds for a dynamically inserted PDF link, continuing immediately as soon as the link exists. Once a PDF link is confirmed, file transfer may take up to 60 seconds so a slow network does not turn an available document into a false failure. Each source is still attempted once. Definitive missing-page, missing-link, and non-PDF failures are not retried; exhausted results use `"status": "source_not_found"`. Extra retry rounds remain opt-in and capped at 2.
 
 ## Development
 

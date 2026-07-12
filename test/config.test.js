@@ -32,8 +32,9 @@ test('settings use doi.org by default and reject invalid integers', () => {
   const defaults = resolveSettings({}, {}, {}, '/tmp');
   assert.deepEqual(defaults.sources, [{ name: 'doi.org', baseUrl: 'https://doi.org' }]);
   assert.equal(defaults.retries, 0);
-  assert.equal(defaults.timeout, 3000);
-  assert.equal(defaults.linkTimeout, 500);
+  assert.equal(defaults.timeout, 8000);
+  assert.equal(defaults.linkTimeout, 2500);
+  assert.equal(defaults.downloadTimeout, 60000);
   assert.throws(() => resolveSettings({ baseUrl: 'https://example.test', retries: '-1' }, {}, {}, '/tmp'), /retries/);
   assert.throws(() => resolveSettings({ baseUrl: 'https://example.test', retries: '3' }, {}, {}, '/tmp'), /retries/);
   assert.throws(() => resolveSettings({ baseUrl: 'https://example.test', linkTimeout: '0' }, {}, {}, '/tmp'), /link timeout/);
@@ -41,9 +42,13 @@ test('settings use doi.org by default and reject invalid integers', () => {
 });
 
 test('explicit CLI timeouts override configured defaults', () => {
-  const settings = resolveSettings({ timeout: '4000', linkTimeout: '800' }, { timeout: 20000, linkTimeout: 9000 }, {}, '/tmp');
+  const settings = resolveSettings(
+    { timeout: '4000', linkTimeout: '800', downloadTimeout: '30000' },
+    { timeout: 20000, linkTimeout: 9000, downloadTimeout: 120000 }, {}, '/tmp',
+  );
   assert.equal(settings.timeout, 4000);
   assert.equal(settings.linkTimeout, 800);
+  assert.equal(settings.downloadTimeout, 30000);
 });
 
 test('configured sources are validated and preferred source moves first', () => {
