@@ -22,6 +22,7 @@ A lightweight, resilient CLI for batch-downloading DOI PDFs. It stays in the bac
 - 可指定下载目录，自动跳过已有 PDF，也可以强制覆盖。
 - 写入 JSON 结果摘要和失败 DOI 清单，方便继续处理。
 - 内置 `nethub update` 在线升级。
+- 未配置下载源时自动从标准 `https://doi.org` 解析 DOI。
 
 ### 环境要求
 
@@ -42,7 +43,9 @@ npx playwright install chromium
 nethub --help
 ```
 
-### 配置下载源
+### 配置下载源（可选）
+
+不创建配置也可以直接使用，netHub 会默认从 `https://doi.org` 解析 DOI。需要指定备用源、下载目录或并发数时，再创建配置文件：
 
 复制示例配置到当前工作目录：
 
@@ -70,7 +73,7 @@ cp nethub.config.example.json nethub.config.json
 
 ```sh
 # 下载一个或多个 DOI
-nethub download 10.1000/example 10.1000/another
+nethub download "10.1000/example" "10.1000/another"
 
 # 从文件中提取 DOI
 nethub download --input dois.txt --input records.csv
@@ -89,6 +92,12 @@ nethub download --source backup --input dois.txt
 
 ```sh
 nethub download --show --profile-dir ~/.nethub-profile 10.1000/example
+```
+
+DOI 中包含括号、星号等 shell 特殊字符时，请始终加引号，例如：
+
+```sh
+nethub download --show "10.1016/S0022-4073(02)00352-7"
 ```
 
 ### 升级
@@ -120,6 +129,7 @@ nethub update
 - Supports a custom output directory, existing-file skipping, and forced replacement.
 - Produces a JSON run summary and a retry-friendly failed DOI list.
 - Includes self-update commands through `nethub update`.
+- Resolves through standard `https://doi.org` when no source is configured.
 
 ### Requirements
 
@@ -135,9 +145,9 @@ npx playwright install chromium
 nethub --help
 ```
 
-### Configure sources
+### Configure sources (optional)
 
-Copy `nethub.config.example.json` to `nethub.config.json`, then edit the ordered source list:
+netHub works without a config file by resolving through `https://doi.org`. To add fallback services or persistent defaults, copy `nethub.config.example.json` to `nethub.config.json`, then edit the ordered source list:
 
 ```json
 {
@@ -156,7 +166,7 @@ Sources are tried in order. Set `"enabled": false` to keep a source configured b
 ### Usage
 
 ```sh
-nethub download 10.1000/example 10.1000/another
+nethub download "10.1000/example" "10.1000/another"
 nethub download --input dois.txt --input records.csv
 nethub download --download-dir ~/Downloads/papers --concurrency 4 10.1000/example
 nethub download --base-url https://service.example 10.1000/example
@@ -164,6 +174,12 @@ nethub download --source backup --input dois.txt
 ```
 
 The browser remains hidden unless verification is detected. Use `--show` to watch the entire run, and `--profile-dir` to preserve a login profile.
+
+Always quote a DOI containing shell metacharacters such as parentheses or asterisks:
+
+```sh
+nethub download --show "10.1016/S0022-4073(02)00352-7"
+```
 
 ### Update
 

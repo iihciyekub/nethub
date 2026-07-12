@@ -14,6 +14,8 @@ const DEFAULTS = Object.freeze({
   windowHeight: 900,
 });
 
+const DEFAULT_SOURCE = Object.freeze({ name: 'doi.org', baseUrl: 'https://doi.org' });
+
 async function loadConfig(configPath) {
   try {
     const value = JSON.parse(await fs.readFile(configPath, 'utf8'));
@@ -55,7 +57,7 @@ function normalizeSources(cli, config, env) {
   if (singleUrl) values = [{ name: 'default', baseUrl: singleUrl }];
   else if (hasConfiguredSources) values = config.sources;
   else if (config.baseUrl) values = [{ name: 'default', baseUrl: config.baseUrl }];
-  else throw new Error('missing download source; use --base-url, NETHUB_BASE_URL, or sources in nethub.config.json');
+  else values = [DEFAULT_SOURCE];
 
   const names = new Set();
   const sources = values.filter((source) => !(source && typeof source === 'object' && source.enabled === false)).map((source, index) => {
@@ -103,4 +105,4 @@ function resolveSettings(cli, config, env = process.env, cwd = process.cwd()) {
   };
 }
 
-module.exports = { DEFAULTS, loadConfig, resolveSettings };
+module.exports = { DEFAULTS, DEFAULT_SOURCE, loadConfig, resolveSettings };

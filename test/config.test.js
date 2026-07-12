@@ -18,8 +18,9 @@ test('settings priority is CLI, environment, config, then defaults', () => {
   assert.equal(settings.headless, false);
 });
 
-test('settings reject a missing endpoint and invalid integers', () => {
-  assert.throws(() => resolveSettings({}, {}, {}, '/tmp'), /missing download source/);
+test('settings use doi.org by default and reject invalid integers', () => {
+  const defaults = resolveSettings({}, {}, {}, '/tmp');
+  assert.deepEqual(defaults.sources, [{ name: 'doi.org', baseUrl: 'https://doi.org' }]);
   assert.throws(() => resolveSettings({ baseUrl: 'https://example.test', retries: '-1' }, {}, {}, '/tmp'), /retries/);
   assert.throws(() => resolveSettings({ baseUrl: 'https://example.test', concurrency: '5' }, {}, {}, '/tmp'), /concurrency/);
 });
