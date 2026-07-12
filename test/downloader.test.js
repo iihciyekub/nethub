@@ -8,13 +8,51 @@ const test = require('node:test');
 const { request } = require('playwright');
 const {
   downloadError, downloadOne, downloadWithRetry, isBlocked, safeFileName,
-  savePdfFromContext, validatePdf, waitForVerification,
+  pdfUrlFromResponse, savePdfFromContext, validatePdf, waitForVerification,
 } = require('../src/downloader.js');
 
 test('safeFileName is portable and PDF validation rejects HTML', () => {
   assert.equal(safeFileName('10.1234/a:b*c?d'), '10.1234_a_b_c_d.pdf');
   assert.throws(() => validatePdf(Buffer.from('<html>'), 'text/html'), /not a PDF/);
   assert.doesNotThrow(() => validatePdf(Buffer.from('%PDF-1.7\nfixture'), 'application/pdf'));
+});
+
+test('PDF response detection does not require a .pdf URL suffix', () => {
+  const response = {
+    headers: () => ({ 'content-type': 'application/pdf' }),
+    url: () => 'https://example.test/10.1000/direct',
+  };
+  assert.equal(pdfUrlFromResponse(response), 'https://example.test/10.1000/direct');
+});
+
+test('a PDF opened as the main page downloads without manual confirmation', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'nethub-direct-pdf-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let reviews = 0;
+  const page = {
+    goto: async () => ({
+      status: () => 200,
+      headers: () => ({ 'content-type': 'application/pdf' }),
+      url: () => 'https://example.test/10.1000/direct',
+    }),
+    url: () => 'https://example.test/10.1000/direct',
+    close: async () => {},
+  };
+  const apiResponse = {
+    ok: () => true, body: async () => Buffer.from('%PDF-1.7\ndirect fixture'),
+    headers: () => ({ 'content-type': 'application/pdf' }),
+  };
+  const result = await downloadOne({
+    newPage: async () => page,
+    request: { get: async () => apiResponse },
+  }, '10.1000/direct', {
+    baseUrl: 'https://example.test', headless: true, timeout: 100,
+    downloadTimeout: 100, downloadDir: directory,
+    verifyChallenge: async () => { reviews += 1; return true; },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(reviews, 0);
+  assert.match((await fs.readFile(result.path)).toString('latin1'), /^%PDF-/);
 });
 
 test('verification detection recognizes human-check wording', async () => {

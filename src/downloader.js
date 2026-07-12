@@ -68,6 +68,26 @@ async function savePdfFromContext(context, url, outputPath, referer, timeout) {
   await atomicWrite(outputPath, buffer);
 }
 
+function pdfUrlFromResponse(response) {
+  if (!response) return '';
+  const headers = response.headers?.() || {};
+  const contentType = headers['content-type'] || '';
+  const disposition = headers['content-disposition'] || '';
+  const url = response.url?.() || '';
+  if (!/^https?:/i.test(url)) return '';
+  return /application\/pdf/i.test(contentType) || /filename\*?=.*\.pdf/i.test(disposition) ? url : '';
+}
+
+async function loadedPdfUrl(page, navigation, observedPdfUrl = '') {
+  const responseUrl = observedPdfUrl || pdfUrlFromResponse(navigation);
+  if (responseUrl) return responseUrl;
+  const viewerOpen = await page.evaluate(() => (
+    document.contentType === 'application/pdf' ||
+    Boolean(document.querySelector('embed[type="application/pdf"], pdf-viewer'))
+  )).catch(() => false);
+  return viewerOpen && /^https?:/i.test(page.url()) ? page.url() : '';
+}
+
 async function isBlocked(page) {
   const source = `${await page.title().catch(() => '')}\n${await page.locator('body').innerText().catch(() => '')}\n${page.frames().map((frame) => frame.url()).join('\n')}`;
   const markerSelector = [
@@ -211,6 +231,18 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
   const page = await context.newPage();
   try {
     await positionWindow(context, page, settings);
+    const outputPath = path.join(settings.downloadDir, safeFileName(doi));
+    let observedPdfUrl = '';
+    page.on?.('response', (response) => {
+      const url = pdfUrlFromResponse(response);
+      if (url) observedPdfUrl = url;
+    });
+    const saveLoadedPdf = async (navigationResponse) => {
+      const url = await loadedPdfUrl(page, navigationResponse, observedPdfUrl);
+      if (!url) return false;
+      await savePdfFromContext(context, url, outputPath, page.url(), settings.downloadTimeout ?? settings.timeout);
+      return true;
+    };
     let navigation;
     let navigationError;
     try {
@@ -224,6 +256,7 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
     if (navigationStatus === 404 || navigationStatus === 410) {
       throw downloadError('PAGE_NOT_FOUND', `source page returned HTTP ${navigationStatus}`);
     }
+    if (await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
     let verificationAttempted = false;
     const blocked = await isBlocked(page);
     const protectedStatus = [401, 403, 429].includes(navigationStatus);
@@ -235,17 +268,21 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
       if (!verified) throw downloadError('VERIFICATION_TIMEOUT', 'manual verification timed out');
       navigationError = null;
     }
+    if (await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
     if (navigationError) throw navigationError;
     let downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
+    if (!downloadUrl && await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
     if (!downloadUrl && !verificationAttempted) {
       verificationAttempted = true;
       const verified = settings.headless && settings.verifyChallenge
         ? await settings.verifyChallenge(page, doi, 'PDF link not found; manual review required')
         : await waitForVerification(page, settings.verificationTimeout, doi, settings.verificationIo || process);
-      if (verified) downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
+      if (verified) {
+        if (await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
+        downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
+      }
     }
     if (!downloadUrl) throw downloadError('PDF_LINK_NOT_FOUND', 'PDF download link not found');
-    const outputPath = path.join(settings.downloadDir, safeFileName(doi));
     await savePdfFromContext(context, downloadUrl, outputPath, page.url(), settings.downloadTimeout ?? settings.timeout);
     return { doi, ok: true, path: outputPath, source: source.name };
   } finally { await page.close().catch(() => {}); }
@@ -299,4 +336,4 @@ async function runBatch(context, dois, settings, operation = downloadOne) {
   return results;
 }
 
-module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, isBlocked, launchContext, runBatch, safeFileName, savePdfFromContext, validatePdf, waitForUserConfirmation, waitForVerification };
+module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, isBlocked, launchContext, loadedPdfUrl, pdfUrlFromResponse, runBatch, safeFileName, savePdfFromContext, validatePdf, waitForUserConfirmation, waitForVerification };
