@@ -135,6 +135,8 @@ nethub update --check
 nethub update
 ```
 
+`--check` 只检查最新 GitHub Release，不修改本机。`nethub update` 会把新版本安装到当前正在运行的 `nethub` 所属全局目录；即使系统同时存在多套 Node/npm，也不会再出现提示更新成功、终端却继续执行旧版本的情况。
+
 ### 输出文件
 
 下载目录中除了 PDF，还会生成：
@@ -225,7 +227,7 @@ nethub update --check
 nethub update
 ```
 
-`--check` reports the latest GitHub Release without changing the installation. `nethub update` installs that tagged release globally through npm.
+`--check` reports the latest GitHub Release without changing the installation. `nethub update` installs that tagged release through npm into the same global prefix as the currently running `nethub`, so systems with multiple Node/npm installations do not report a successful update while continuing to execute an older copy.
 
 ### Output
 

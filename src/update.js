@@ -1,4 +1,5 @@
 const { execFile } = require('node:child_process');
+const path = require('node:path');
 const { promisify } = require('node:util');
 const packageInfo = require('../package.json');
 
@@ -26,6 +27,14 @@ function compareVersions(left, right) {
   return 0;
 }
 
+function installationPrefix(moduleDirectory = __dirname) {
+  const marker = `${path.sep}node_modules${path.sep}nethub${path.sep}src`;
+  const index = moduleDirectory.lastIndexOf(marker);
+  if (index < 0) return '';
+  const parent = moduleDirectory.slice(0, index);
+  return path.basename(parent) === 'lib' ? path.dirname(parent) : parent;
+}
+
 async function updateNethub(options = {}, dependencies = {}) {
   const stdout = options.stdout || process.stdout;
   const release = await latestRelease(dependencies.fetchApi);
@@ -42,9 +51,15 @@ async function updateNethub(options = {}, dependencies = {}) {
   const archive = `https://github.com/${REPOSITORY}/archive/refs/tags/${encodeURIComponent(release.tag_name)}.tar.gz`;
   stdout.write(`Updating netHub ${packageInfo.version} -> ${latestVersion}...\n`);
   const run = dependencies.execFileApi || execFileAsync;
-  await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '--global', archive], { stdio: 'inherit' });
+  const prefix = dependencies.installationPrefix === undefined
+    ? installationPrefix()
+    : dependencies.installationPrefix;
+  const args = ['install', '--global'];
+  if (prefix) args.push('--prefix', prefix);
+  args.push(archive);
+  await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, { stdio: 'inherit' });
   stdout.write(`Updated netHub to ${latestVersion}.\n`);
   return { updated: true, currentVersion: packageInfo.version, latestVersion };
 }
 
-module.exports = { REPOSITORY, compareVersions, latestRelease, updateNethub };
+module.exports = { REPOSITORY, compareVersions, installationPrefix, latestRelease, updateNethub };
