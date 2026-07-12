@@ -72,7 +72,8 @@ export NETHUB_CONFIG=/absolute/path/to/nethub.config.json
 {
   "downloadDir": "./downloads",
   "concurrency": 3,
-  "retries": 1,
+  "retries": 0,
+  "linkTimeout": 2000,
   "sources": [
     { "name": "primary", "baseUrl": "https://service-a.example" },
     { "name": "backup", "baseUrl": "https://service-b.example" }
@@ -99,6 +100,9 @@ nethub download --base-url https://service.example 10.1000/example
 
 # 优先使用某个已配置的源，失败后仍会自动使用其他源
 nethub download --source backup --input dois.txt
+
+# 快速判断是否存在可下载 PDF（3 秒导航、0.5 秒链接探测、不重试）
+nethub download --fast --json "10.1000/example"
 ```
 
 通常不需要 `--show`。netHub 会保持后台运行，只在检测到验证页面时弹出窗口。如果希望观察完整过程，可使用：
@@ -129,6 +133,8 @@ nethub update
 
 - `download-results.json`：请求、结果、实际下载源、失败原因和有效配置。
 - `failed-dois.txt`：每行一个失败 DOI，便于重新下载。
+
+每个下载源默认只尝试一次。明确的页面不存在、找不到 PDF 链接或返回内容不是 PDF 时不会重复尝试；所有来源均失败后，JSON 结果会使用 `"status": "source_not_found"`。只有网络超时、限流或服务器错误等暂时性问题才允许通过 `--retries 1` 再试，额外重试轮数最多为 2。
 
 ## English
 
@@ -166,7 +172,8 @@ netHub works without a config file by resolving through `https://doi.org`. Confi
 {
   "downloadDir": "./downloads",
   "concurrency": 3,
-  "retries": 1,
+  "retries": 0,
+  "linkTimeout": 2000,
   "sources": [
     { "name": "primary", "baseUrl": "https://service-a.example" },
     { "name": "backup", "baseUrl": "https://service-b.example" }
@@ -184,6 +191,7 @@ nethub download --input dois.txt --input records.csv
 nethub download --download-dir ~/Downloads/papers --concurrency 4 10.1000/example
 nethub download --base-url https://service.example 10.1000/example
 nethub download --source backup --input dois.txt
+nethub download --fast --json "10.1000/example"
 ```
 
 The browser remains hidden unless verification is detected. Use `--show` to watch the entire run, and `--profile-dir` to preserve a login profile.
@@ -207,6 +215,8 @@ nethub update
 
 - `download-results.json` contains requested values, per-item status, selected source, errors, and effective settings.
 - `failed-dois.txt` contains one failed DOI per line for easy retries.
+
+Each source is attempted once by default. Definitive failures such as a missing page, no PDF link, or non-PDF content are not retried. When every source fails, the result uses `"status": "source_not_found"`. Only transient network, rate-limit, or server failures are eligible for `--retries`; extra retry rounds are capped at 2. Use `--fast` for a 3-second navigation and 500-millisecond PDF-link probe with no retries.
 
 ## Development
 

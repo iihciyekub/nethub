@@ -18,8 +18,10 @@ Options:
   --download-dir DIR           Output directory (default: ./downloads)
   --input FILE                 Extract DOIs from all file text; repeatable
   --concurrency N              Concurrent workers (default: 3)
-  --retries N                  Retries after the first attempt (default: 1)
+  --retries N                  Extra retry rounds (default: 0)
   --timeout MS                 Navigation and download timeout (default: 10000)
+  --link-timeout MS            PDF link detection wait (default: 2000)
+  --fast                       Quick probe: 3s navigation, 0.5s PDF-link wait
   --verification-timeout MS    Manual verification wait (default: 180000)
   --profile-dir DIR            Persistent Chromium profile
   --force                      Replace an existing DOI PDF
@@ -49,7 +51,7 @@ function parseArgs(argv) {
   const valueOptions = new Map([
     ['--config', 'configPath'], ['--base-url', 'baseUrl'], ['--download-dir', 'downloadDir'],
     ['--source', 'source'],
-    ['--concurrency', 'concurrency'], ['--retries', 'retries'], ['--timeout', 'timeout'],
+    ['--concurrency', 'concurrency'], ['--retries', 'retries'], ['--timeout', 'timeout'], ['--link-timeout', 'linkTimeout'],
     ['--verification-timeout', 'verificationTimeout'], ['--profile-dir', 'profileDir'],
     ['--window-x', 'windowX'], ['--window-y', 'windowY'],
   ]);
@@ -59,6 +61,7 @@ function parseArgs(argv) {
     if (arg === '--force') { output.force = true; continue; }
     if (arg === '--json') { output.json = true; continue; }
     if (arg === '--show') { output.show = true; continue; }
+    if (arg === '--fast') { output.fast = true; continue; }
     if (arg === '--input') {
       if (!argv[index + 1]) throw new Error('--input requires a file');
       output.inputs.push(path.resolve(argv[++index]));
@@ -87,7 +90,7 @@ async function main(argv, io = process) {
   if (requestedDois.length === 0) throw new Error('no valid DOI found in arguments or input files');
   const payload = await downloadBatch(requestedDois, invalidDois, settings);
   if (settings.jsonOutput) io.stdout.write(`${JSON.stringify(payload)}\n`);
-  else io.stdout.write(`Completed ${payload.results.length} request(s): ${payload.results.filter((item) => item.ok).length} successful, ${payload.results.filter((item) => !item.ok).length} failed.\nResults: ${payload.summaryPath}\n`);
+  else io.stdout.write(`Completed ${payload.results.length} request(s): ${payload.results.filter((item) => item.ok).length} successful, ${payload.results.filter((item) => item.status === 'source_not_found').length} source not found.\nResults: ${payload.summaryPath}\n`);
   return payload;
 }
 

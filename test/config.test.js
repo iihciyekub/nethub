@@ -17,12 +17,12 @@ test('settings priority is CLI, environment, config, then defaults', () => {
   const settings = resolveSettings(
     { baseUrl: 'https://cli.invalid/', concurrency: '4', force: true, show: true },
     { baseUrl: 'https://config.invalid', concurrency: 2, retries: 4, skipExisting: true },
-    { NETHUB_BASE_URL: 'https://env.invalid', NETHUB_RETRIES: '3', NETHUB_DOWNLOAD_DIR: 'out' },
+    { NETHUB_BASE_URL: 'https://env.invalid', NETHUB_RETRIES: '2', NETHUB_DOWNLOAD_DIR: 'out' },
     '/workspace',
   );
   assert.equal(settings.baseUrl, 'https://cli.invalid');
   assert.equal(settings.concurrency, 4);
-  assert.equal(settings.retries, 3);
+  assert.equal(settings.retries, 2);
   assert.equal(settings.downloadDir, path.join('/workspace', 'out'));
   assert.equal(settings.skipExisting, false);
   assert.equal(settings.headless, false);
@@ -31,8 +31,20 @@ test('settings priority is CLI, environment, config, then defaults', () => {
 test('settings use doi.org by default and reject invalid integers', () => {
   const defaults = resolveSettings({}, {}, {}, '/tmp');
   assert.deepEqual(defaults.sources, [{ name: 'doi.org', baseUrl: 'https://doi.org' }]);
+  assert.equal(defaults.retries, 0);
+  assert.equal(defaults.linkTimeout, 2000);
   assert.throws(() => resolveSettings({ baseUrl: 'https://example.test', retries: '-1' }, {}, {}, '/tmp'), /retries/);
+  assert.throws(() => resolveSettings({ baseUrl: 'https://example.test', retries: '3' }, {}, {}, '/tmp'), /retries/);
+  assert.throws(() => resolveSettings({ baseUrl: 'https://example.test', linkTimeout: '0' }, {}, {}, '/tmp'), /link timeout/);
   assert.throws(() => resolveSettings({ baseUrl: 'https://example.test', concurrency: '5' }, {}, {}, '/tmp'), /concurrency/);
+});
+
+test('fast mode uses short waits unless explicitly overridden', () => {
+  const fast = resolveSettings({ fast: true }, { timeout: 20000, linkTimeout: 9000, retries: 2 }, {}, '/tmp');
+  assert.equal(fast.timeout, 3000);
+  assert.equal(fast.linkTimeout, 500);
+  assert.equal(fast.retries, 0);
+  assert.equal(resolveSettings({ fast: true, timeout: '4000' }, {}, {}, '/tmp').timeout, 4000);
 });
 
 test('configured sources are validated and preferred source moves first', () => {
