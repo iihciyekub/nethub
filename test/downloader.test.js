@@ -376,3 +376,18 @@ test('stable batches adapt from three to four concurrent workers', async (t) => 
   assert.ok(results.every((item) => item.ok));
   assert.equal(maximumActive, 4);
 });
+
+test('TTY failure logs clear the progress row and print on their own line', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'nethub-progress-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const writes = [];
+  await runBatch({}, ['10.1/fail'], {
+    downloadDir: directory, retries: 0, skipExisting: false, concurrency: 4,
+    baseUrl: 'https://one.test', sources: [{ name: 'one', baseUrl: 'https://one.test' }],
+    progressStream: { isTTY: true, write: (value) => writes.push(value) },
+  }, async () => { throw downloadError('SOURCE_NOT_FOUND', 'missing'); });
+  const log = writes.find((value) => value.includes('attempt 1 failed'));
+  assert.match(log, /^\r\x1b\[2K/);
+  assert.match(log, /missing\n$/);
+  assert.ok(writes.some((value) => value.includes('Active 1 | Limit 1')));
+});

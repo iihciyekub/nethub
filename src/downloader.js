@@ -380,7 +380,11 @@ async function downloadWithRetry(context, doi, settings, operation = downloadOne
       } catch (error) {
         if (error.retryable !== false) retryableSources.push(source);
         errors.push({ source: source.name, code: error.code || 'DOWNLOAD_FAILED', reason: error.message });
-        process.stderr.write(`[${doi}] source ${source.name}, attempt ${round + 1} failed: ${error.message}\n`);
+        const message = error.code === 'MANUAL_REVIEW_REQUIRED'
+          ? `[${doi}] queued for manual review on source ${source.name}: ${error.message}`
+          : `[${doi}] source ${source.name}, attempt ${round + 1} failed: ${error.message}`;
+        const logFailure = settings.logFailure || ((value) => process.stderr.write(`${value}\n`));
+        logFailure(message);
       }
     }
     if (!retryableSources.length) break;
@@ -412,13 +416,16 @@ async function runBatch(context, dois, settings, operation = downloadOne) {
   const minimumConcurrency = Math.min(2, targetConcurrency);
   let successStreak = 0;
   const progressStream = settings.progressStream || process.stderr;
+  const logFailure = (message) => {
+    progressStream.write(progressStream.isTTY ? `\r\x1b[2K${message}\n` : `${message}\n`);
+  };
   const reportProgress = (finish = false) => {
     if (!progressStream.isTTY) return;
     const downloaded = results.filter((item) => item?.ok).length;
     const missing = results.filter((item) => item?.status === 'source_not_found').length;
     const manual = results.filter((item) => item?.status === 'manual_required').length;
     const waiting = Math.max(0, dois.length - processed - active);
-    progressStream.write(`\r\x1b[2KProgress ${processed}/${dois.length} | Active ${active}/${targetConcurrency} | Waiting ${waiting} | Manual ${manual} | Downloaded ${downloaded} | Missing ${missing}${finish ? '\n' : ''}`);
+    progressStream.write(`\r\x1b[2KProgress ${processed}/${dois.length} | Active ${active} | Limit ${targetConcurrency} | Waiting ${waiting} | Manual ${manual} | Downloaded ${downloaded} | Missing ${missing}${finish ? '\n' : ''}`);
   };
   const adjustConcurrency = (result) => {
     const pressure = result.errors?.some((error) => (
@@ -443,7 +450,9 @@ async function runBatch(context, dois, settings, operation = downloadOne) {
       const index = cursor++;
       active += 1;
       reportProgress();
-      results[index] = await downloadWithRetry(context, dois[index], { ...settings, deferManualReview: true }, operation);
+      results[index] = await downloadWithRetry(context, dois[index], {
+        ...settings, deferManualReview: true, logFailure,
+      }, operation);
       active -= 1;
       processed += 1;
       adjustConcurrency(results[index]);
@@ -461,6 +470,7 @@ async function runBatch(context, dois, settings, operation = downloadOne) {
     reportProgress();
     const reviewed = await downloadWithRetry(context, dois[index], {
       ...settings, deferManualReview: false,
+      logFailure,
       sources: manualSources.length ? manualSources : configuredSources,
     }, operation);
     results[index] = {

@@ -27,6 +27,7 @@ A lightweight, resilient CLI for batch-downloading DOI PDFs. It stays in the bac
 - 明确显示“论文尚未收录/数据库中不可用”的页面会立即标记为来源缺失，不触发人工确认。
 - 多个 PDF 候选会按可信度逐个验证，某个链接返回 HTML 时继续尝试下一个。
 - 需要人工确认的 DOI 会先挂起，不占用后台下载 worker；普通任务完成后再串行处理。
+- 进度条原地刷新；失败或人工队列消息会先清除进度行并独占一整行，避免日志粘连。
 
 ### 环境要求
 
@@ -159,6 +160,7 @@ nethub update
 - Treats explicit paper-unavailable/database-missing pages as source misses immediately without manual review.
 - Validates multiple PDF candidates in score order instead of failing on the first HTML response.
 - Defers manual-review DOI values without consuming background workers, then handles them serially after the normal queue.
+- Keeps progress on one refreshable row while failure and manual-queue messages print as separate full lines.
 
 ### Requirements
 
