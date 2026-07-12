@@ -23,20 +23,20 @@ test('update check reports a newer release without installing', async () => {
   const writes = [];
   const result = await updateNethub(
     { checkOnly: true, stdout: { write: (value) => writes.push(value) } },
-    { fetchApi: async () => response('v0.0.4'), execFileApi: async () => { installed = true; } },
+    { fetchApi: async () => response('v0.0.5'), execFileApi: async () => { installed = true; } },
   );
-  assert.equal(result.latestVersion, '0.0.4');
+  assert.equal(result.latestVersion, '0.0.5');
   assert.equal(installed, false);
-  assert.match(writes.join(''), /latest release: 0\.0\.4/);
+  assert.match(writes.join(''), /latest release: 0\.0\.5/);
 });
 
 test('update installs the tagged GitHub archive globally', async () => {
   let invocation;
   await updateNethub(
     { stdout: { write: () => {} } },
-    { fetchApi: async () => response('v0.0.4'), execFileApi: async (...args) => { invocation = args; } },
+    { fetchApi: async () => response('v0.0.5'), execFileApi: async (...args) => { invocation = args; } },
   );
   assert.deepEqual(invocation[1], [
-    'install', '--global', 'https://github.com/iihciyekub/nethub/archive/refs/tags/v0.0.4.tar.gz',
+    'install', '--global', 'https://github.com/iihciyekub/nethub/archive/refs/tags/v0.0.5.tar.gz',
   ]);
 });

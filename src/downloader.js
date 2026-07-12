@@ -9,6 +9,13 @@ const DOWNLOAD_SELECTOR = [
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function downloadError(code, message, retryable = false) {
+  const error = new Error(message);
+  error.code = code;
+  error.retryable = retryable;
+  return error;
+}
+
 function safeFileName(doi) {
   const normalized = doi.normalize('NFKC').replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').replace(/[. ]+$/g, '');
   return `${normalized || 'document'}.pdf`;
@@ -32,10 +39,10 @@ async function atomicWrite(filePath, data) {
 
 function validatePdf(buffer, contentType = '') {
   if (!Buffer.isBuffer(buffer) || buffer.length < 5 || buffer.subarray(0, 5).toString('latin1') !== '%PDF-') {
-    throw new Error('download candidate is not a PDF (missing PDF signature)');
+    throw downloadError('NOT_PDF', 'download candidate is not a PDF (missing PDF signature)');
   }
   if (contentType && !/application\/pdf|application\/octet-stream/i.test(contentType)) {
-    throw new Error(`download candidate is not a PDF (${contentType})`);
+    throw downloadError('NOT_PDF', `download candidate is not a PDF (${contentType})`);
   }
 }
 
@@ -45,7 +52,10 @@ async function savePdfFromContext(context, url, outputPath, referer, timeout) {
     maxRedirects: 5,
     headers: { accept: 'application/pdf,*/*;q=0.8', referer },
   });
-  if (!response.ok()) throw new Error(`HTTP ${response.status()} ${response.statusText()}`);
+  if (!response.ok()) {
+    const status = response.status();
+    throw downloadError(`HTTP_${status}`, `HTTP ${status} ${response.statusText()}`, status === 429 || status >= 500);
+  }
   const buffer = await response.body();
   validatePdf(buffer, response.headers()['content-type'] || '');
   await atomicWrite(outputPath, buffer);
@@ -163,15 +173,26 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
   const page = await context.newPage();
   try {
     await positionWindow(context, page, settings);
-    await page.goto(articleUrl(source.baseUrl, doi), { waitUntil: 'domcontentloaded', timeout: settings.timeout });
+    let navigation;
+    try {
+      navigation = await page.goto(articleUrl(source.baseUrl, doi), { waitUntil: 'domcontentloaded', timeout: settings.timeout });
+    } catch (error) {
+      error.code = /timeout/i.test(error.message) ? 'NAVIGATION_TIMEOUT' : 'NAVIGATION_FAILED';
+      error.retryable = true;
+      throw error;
+    }
+    const navigationStatus = navigation?.status();
+    if (navigationStatus === 404 || navigationStatus === 410) {
+      throw downloadError('PAGE_NOT_FOUND', `source page returned HTTP ${navigationStatus}`);
+    }
     if (await isBlocked(page)) {
       const verified = settings.headless && settings.verifyChallenge
         ? await settings.verifyChallenge(page, doi)
         : await waitForVerification(page, settings.verificationTimeout, doi);
       if (!verified) throw new Error('blocked by protection page');
     }
-    const downloadUrl = await findDownloadUrl(page, settings.timeout);
-    if (!downloadUrl) throw new Error('PDF download link not found');
+    const downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
+    if (!downloadUrl) throw downloadError('PDF_LINK_NOT_FOUND', 'PDF download link not found');
     const outputPath = path.join(settings.downloadDir, safeFileName(doi));
     await savePdfFromContext(context, downloadUrl, outputPath, page.url(), settings.timeout);
     return { doi, ok: true, path: outputPath, source: source.name };
@@ -179,24 +200,38 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
 }
 
 async function downloadWithRetry(context, doi, settings, operation = downloadOne) {
+  const startedAt = Date.now();
   const outputPath = path.join(settings.downloadDir, safeFileName(doi));
-  if (settings.skipExisting && await exists(outputPath)) return { doi, ok: true, skipped: true, path: outputPath, attempts: 0 };
+  if (settings.skipExisting && await exists(outputPath)) {
+    return { doi, ok: true, status: 'downloaded', skipped: true, path: outputPath, attempts: 0, elapsedMs: Date.now() - startedAt };
+  }
   const sources = settings.sources?.length ? settings.sources : [{ name: 'default', baseUrl: settings.baseUrl }];
   const errors = [];
   let attempts = 0;
+  let roundSources = sources;
   for (let round = 0; round <= settings.retries; round += 1) {
-    for (const source of sources) {
+    const retryableSources = [];
+    for (const source of roundSources) {
       attempts += 1;
       try {
-        return { ...await operation(context, doi, { ...settings, baseUrl: source.baseUrl }, source), attempts };
+        return {
+          ...await operation(context, doi, { ...settings, baseUrl: source.baseUrl }, source),
+          status: 'downloaded', attempts, elapsedMs: Date.now() - startedAt,
+        };
       } catch (error) {
-        errors.push({ source: source.name, reason: error.message });
+        if (error.retryable !== false) retryableSources.push(source);
+        errors.push({ source: source.name, code: error.code || 'DOWNLOAD_FAILED', reason: error.message });
         process.stderr.write(`[${doi}] source ${source.name}, attempt ${round + 1} failed: ${error.message}\n`);
       }
     }
+    if (!retryableSources.length) break;
+    roundSources = retryableSources;
     if (round < settings.retries) await sleep(250 * (round + 1));
   }
-  return { doi, ok: false, reason: errors.at(-1)?.reason || 'unknown error', attempts, errors };
+  return {
+    doi, ok: false, status: 'source_not_found', reason: 'PDF source not found',
+    attempts, elapsedMs: Date.now() - startedAt, errors,
+  };
 }
 
 async function runBatch(context, dois, settings, operation = downloadOne) {
@@ -212,4 +247,4 @@ async function runBatch(context, dois, settings, operation = downloadOne) {
   return results;
 }
 
-module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadOne, downloadWithRetry, findDownloadUrl, launchContext, runBatch, safeFileName, savePdfFromContext, validatePdf };
+module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, launchContext, runBatch, safeFileName, savePdfFromContext, validatePdf };

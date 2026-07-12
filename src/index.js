@@ -17,7 +17,7 @@ async function downloadBatch(requestedDois, invalidDois, settings, dependencies 
   const failedPath = path.join(settings.downloadDir, 'failed-dois.txt');
   const payload = {
     requestedDois, invalidDois, results, downloadDir: settings.downloadDir,
-    concurrency: settings.concurrency, retries: settings.retries, timeout: settings.timeout,
+    concurrency: settings.concurrency, retries: settings.retries, timeout: settings.timeout, linkTimeout: settings.linkTimeout,
     verificationTimeout: settings.verificationTimeout, baseUrl: settings.baseUrl, sources: settings.sources,
     summaryPath, failedPath,
   };

@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { request } = require('playwright');
-const { downloadWithRetry, safeFileName, savePdfFromContext, validatePdf } = require('../src/downloader.js');
+const { downloadError, downloadWithRetry, safeFileName, savePdfFromContext, validatePdf } = require('../src/downloader.js');
 
 test('safeFileName is portable and PDF validation rejects HTML', () => {
   assert.equal(safeFileName('10.1234/a:b*c?d'), '10.1234_a_b_c_d.pdf');
@@ -79,4 +79,22 @@ test('failed source automatically falls through to the next source', async (t) =
   assert.deepEqual(seen, ['primary', 'backup']);
   assert.equal(result.source, 'backup');
   assert.equal(result.attempts, 2);
+});
+
+test('terminal failures try every source once and finish as source_not_found', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'nethub-not-found-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let calls = 0;
+  const result = await downloadWithRetry({}, '10.1000/missing', {
+    downloadDir: directory, retries: 2, skipExisting: false,
+    sources: [{ name: 'one', baseUrl: 'https://one.test' }, { name: 'two', baseUrl: 'https://two.test' }],
+  }, async () => {
+    calls += 1;
+    throw downloadError('PDF_LINK_NOT_FOUND', 'PDF download link not found');
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.status, 'source_not_found');
+  assert.equal(result.reason, 'PDF source not found');
+  assert.equal(result.attempts, 2);
+  assert.ok(result.elapsedMs >= 0);
 });
