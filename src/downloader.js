@@ -88,6 +88,19 @@ async function loadedPdfUrl(page, navigation, observedPdfUrl = '') {
   return viewerOpen && /^https?:/i.test(page.url()) ? page.url() : '';
 }
 
+async function unavailablePageReason(page) {
+  const text = `${await page.title().catch(() => '')}\n${await page.locator('body').innerText().catch(() => '')}`;
+  const unavailable = [
+    /the\s+following\s+(?:paper|article)\s+is\s+not\s+yet\s+available\s+in\s+(?:my|our|the)\s+database/i,
+    /(?:paper|article)\s+(?:is|was)\s+not\s+(?:yet\s+)?available\s+in\s+(?:my|our|the)\s+database/i,
+    /(?:we\s+(?:do\s+not|don't)\s+have|could\s+not\s+find|couldn't\s+find)\s+(?:this|the)\s+(?:paper|article)/i,
+    /no\s+(?:paper|article|pdf)\s+(?:was\s+)?found/i,
+    /(?:数据库中|资料库中).{0,12}(?:尚无|没有|未找到).{0,8}(?:论文|文章)/,
+    /(?:论文|文章).{0,8}(?:尚未收录|暂未收录|不可用|未找到)/,
+  ].some((pattern) => pattern.test(text));
+  return unavailable ? 'source reports that the paper is unavailable' : '';
+}
+
 async function isBlocked(page) {
   const source = `${await page.title().catch(() => '')}\n${await page.locator('body').innerText().catch(() => '')}\n${page.frames().map((frame) => frame.url()).join('\n')}`;
   const markerSelector = [
@@ -274,6 +287,8 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
       throw downloadError('PAGE_NOT_FOUND', `source page returned HTTP ${navigationStatus}`);
     }
     if (await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
+    let unavailableReason = await unavailablePageReason(page);
+    if (unavailableReason) throw downloadError('SOURCE_NOT_FOUND', unavailableReason);
     let verificationAttempted = false;
     const blocked = await isBlocked(page);
     const protectedStatus = [401, 403, 429].includes(navigationStatus);
@@ -287,6 +302,8 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
       navigationError = null;
     }
     if (await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
+    unavailableReason = await unavailablePageReason(page);
+    if (unavailableReason) throw downloadError('SOURCE_NOT_FOUND', unavailableReason);
     if (navigationError) throw navigationError;
     let downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
     if (!downloadUrl && await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
@@ -355,4 +372,4 @@ async function runBatch(context, dois, settings, operation = downloadOne) {
   return results;
 }
 
-module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, isBlocked, launchContext, loadedPdfUrl, pdfUrlFromResponse, runBatch, safeFileName, savePdfFromContext, validatePdf, waitForUserConfirmation, waitForVerification };
+module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, isBlocked, launchContext, loadedPdfUrl, pdfUrlFromResponse, runBatch, safeFileName, savePdfFromContext, unavailablePageReason, validatePdf, waitForUserConfirmation, waitForVerification };

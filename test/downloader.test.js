@@ -8,7 +8,7 @@ const test = require('node:test');
 const { request } = require('playwright');
 const {
   downloadError, downloadOne, downloadWithRetry, isBlocked, safeFileName,
-  pdfUrlFromResponse, savePdfFromContext, validatePdf, waitForVerification,
+  pdfUrlFromResponse, savePdfFromContext, unavailablePageReason, validatePdf, waitForVerification,
 } = require('../src/downloader.js');
 
 test('safeFileName is portable and PDF validation rejects HTML', () => {
@@ -64,6 +64,31 @@ test('verification detection recognizes human-check wording', async () => {
     frames: () => [],
   };
   assert.equal(await isBlocked(page), true);
+});
+
+test('an explicit database-unavailable page is recognized as source not found', async () => {
+  const page = {
+    title: async () => 'Paper unavailable',
+    locator: () => ({ innerText: async () => 'Alas, the following paper is not yet available in\nmy database:' }),
+  };
+  assert.equal(await unavailablePageReason(page), 'source reports that the paper is unavailable');
+});
+
+test('an unavailable page fails without opening manual review', async () => {
+  let reviews = 0;
+  const page = {
+    goto: async () => ({ status: () => 200 }), title: async () => 'Paper unavailable',
+    locator: (selector) => selector === 'body'
+      ? { innerText: async () => 'Alas, the following paper is not yet available in my database:' }
+      : { count: async () => 0 },
+    evaluate: async () => false, url: () => 'https://example.test/missing', close: async () => {},
+  };
+  await assert.rejects(() => downloadOne({ newPage: async () => page }, '10.1000/unavailable', {
+    baseUrl: 'https://example.test', headless: true, timeout: 10,
+    downloadTimeout: 100, downloadDir: '/tmp',
+    verifyChallenge: async () => { reviews += 1; return true; },
+  }), (error) => error.code === 'SOURCE_NOT_FOUND');
+  assert.equal(reviews, 0);
 });
 
 test('interactive verification waits for explicit terminal confirmation', async () => {

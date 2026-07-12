@@ -24,6 +24,7 @@ A lightweight, resilient CLI for batch-downloading DOI PDFs. It stays in the bac
 - 内置 `nethub update` 在线升级。
 - 未配置下载源时自动从标准 `https://doi.org` 解析 DOI。
 - 自动识别主页面或网络响应中已经打开的 PDF，无需额外人工确认。
+- 明确显示“论文尚未收录/数据库中不可用”的页面会立即标记为来源缺失，不触发人工确认。
 
 ### 环境要求
 
@@ -153,6 +154,7 @@ nethub update
 - Includes self-update commands through `nethub update`.
 - Resolves through standard `https://doi.org` when no source is configured.
 - Detects PDFs already opened as the main page or observed in network responses without unnecessary manual confirmation.
+- Treats explicit paper-unavailable/database-missing pages as source misses immediately without manual review.
 
 ### Requirements
 
