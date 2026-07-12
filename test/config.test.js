@@ -1,7 +1,17 @@
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const test = require('node:test');
-const { resolveSettings } = require('../src/config.js');
+const { findConfigPath, resolveSettings } = require('../src/config.js');
+
+test('config lookup supports explicit, environment, local, and global paths', async () => {
+  const existing = new Set(['/work/nethub.config.json', '/home/user/.config/nethub/config.json']);
+  const access = async (candidate) => { if (!existing.has(candidate)) throw new Error('missing'); };
+  assert.equal(await findConfigPath('/chosen.json', {}, '/work', '/home/user', access), '/chosen.json');
+  assert.equal(await findConfigPath(undefined, { NETHUB_CONFIG: 'shared.json' }, '/work', '/home/user', access), '/work/shared.json');
+  assert.equal(await findConfigPath(undefined, {}, '/work', '/home/user', access), '/work/nethub.config.json');
+  existing.delete('/work/nethub.config.json');
+  assert.equal(await findConfigPath(undefined, {}, '/work', '/home/user', access), '/home/user/.config/nethub/config.json');
+});
 
 test('settings priority is CLI, environment, config, then defaults', () => {
   const settings = resolveSettings(

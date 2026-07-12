@@ -45,12 +45,25 @@ nethub --help
 
 ### 配置下载源（可选）
 
-不创建配置也可以直接使用，netHub 会默认从 `https://doi.org` 解析 DOI。需要指定备用源、下载目录或并发数时，再创建配置文件：
+不创建配置也可以直接使用，netHub 会默认从 `https://doi.org` 解析 DOI。需要指定备用源、下载目录或并发数时，再创建配置文件。配置查找顺序为 `--config`、`NETHUB_CONFIG`、当前目录的 `nethub.config.json`、`~/.config/nethub/config.json`：
 
 复制示例配置到当前工作目录：
 
 ```sh
 cp nethub.config.example.json nethub.config.json
+```
+
+希望所有目录共用一份配置时，可以放在全局位置：
+
+```sh
+mkdir -p ~/.config/nethub
+cp nethub.config.example.json ~/.config/nethub/config.json
+```
+
+也可以指定现有文件：
+
+```sh
+export NETHUB_CONFIG=/absolute/path/to/nethub.config.json
 ```
 
 编辑 `nethub.config.json`：
@@ -147,7 +160,7 @@ nethub --help
 
 ### Configure sources (optional)
 
-netHub works without a config file by resolving through `https://doi.org`. To add fallback services or persistent defaults, copy `nethub.config.example.json` to `nethub.config.json`, then edit the ordered source list:
+netHub works without a config file by resolving through `https://doi.org`. Config lookup order is `--config`, `NETHUB_CONFIG`, `./nethub.config.json`, then `~/.config/nethub/config.json`. To add fallback services or persistent defaults, copy `nethub.config.example.json` to `nethub.config.json`, then edit the ordered source list:
 
 ```json
 {

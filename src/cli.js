@@ -1,5 +1,5 @@
 const path = require('node:path');
-const { loadConfig, resolveSettings } = require('./config.js');
+const { findConfigPath, loadConfig, resolveSettings } = require('./config.js');
 const { collectDois } = require('./doi.js');
 const { downloadBatch } = require('./index.js');
 const { updateNethub } = require('./update.js');
@@ -12,7 +12,7 @@ Usage:
   nethub update [--check]
 
 Options:
-  --config FILE                Config file (default: ./nethub.config.json)
+  --config FILE                Use this configuration file
   --base-url URL               Use one target URL (default: https://doi.org)
   --source NAME                Try this configured source first
   --download-dir DIR           Output directory (default: ./downloads)
@@ -32,7 +32,9 @@ Options:
 Update options:
   --check                      Check the latest release without installing
 
-Environment variables use the NETHUB_ prefix, for example NETHUB_BASE_URL,
+Config lookup: --config, NETHUB_CONFIG, ./nethub.config.json, then
+~/.config/nethub/config.json. Environment variables use the NETHUB_ prefix,
+for example NETHUB_BASE_URL,
 NETHUB_SOURCE, NETHUB_DOWNLOAD_DIR, NETHUB_CONCURRENCY, and NETHUB_PROFILE_DIR.`;
 
 function parseArgs(argv) {
@@ -43,7 +45,7 @@ function parseArgs(argv) {
     return { command: 'update', check: argv.includes('--check') };
   }
   if (argv[0] !== 'download') throw new Error(`unknown command: ${argv[0]}`);
-  const output = { positional: [], inputs: [], configPath: path.resolve('nethub.config.json') };
+  const output = { positional: [], inputs: [] };
   const valueOptions = new Map([
     ['--config', 'configPath'], ['--base-url', 'baseUrl'], ['--download-dir', 'downloadDir'],
     ['--source', 'source'],
@@ -78,7 +80,8 @@ async function main(argv, io = process) {
   const cli = parseArgs(argv);
   if (cli.help) { io.stdout.write(`${HELP}\n`); return null; }
   if (cli.command === 'update') return updateNethub({ checkOnly: cli.check, stdout: io.stdout });
-  const config = await loadConfig(cli.configPath);
+  const configPath = await findConfigPath(cli.configPath);
+  const config = await loadConfig(configPath);
   const settings = resolveSettings(cli, config);
   const { requestedDois, invalidDois } = await collectDois(cli.positional, cli.inputs);
   if (requestedDois.length === 0) throw new Error('no valid DOI found in arguments or input files');
