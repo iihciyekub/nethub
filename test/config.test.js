@@ -31,6 +31,7 @@ test('settings priority is CLI, environment, config, then defaults', () => {
 test('settings use doi.org by default and reject invalid integers', () => {
   const defaults = resolveSettings({}, {}, {}, '/tmp');
   assert.deepEqual(defaults.sources, [{ name: 'doi.org', baseUrl: 'https://doi.org' }]);
+  assert.equal(defaults.concurrency, 4);
   assert.equal(defaults.retries, 0);
   assert.equal(defaults.timeout, 8000);
   assert.equal(defaults.linkTimeout, 2500);

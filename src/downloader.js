@@ -158,20 +158,30 @@ async function copyBrowserState(fromContext, toContext) {
   }
 }
 
-async function findDownloadUrl(page, timeout) {
+async function findDownloadUrls(page, timeout) {
   await page.waitForFunction((selector) => Boolean(document.querySelector(selector)), DOWNLOAD_SELECTOR, { timeout }).catch(() => {});
-  const candidate = await page.evaluate(() => {
-    const candidates = [...document.querySelectorAll('a[href], object[data], embed[src], iframe[src]')].map((element) => {
+  const candidates = await page.evaluate(() => (
+    [...document.querySelectorAll('a[href], object[data], embed[src], iframe[src]')].map((element) => {
       const href = (element.getAttribute('href') || element.getAttribute('data') || element.getAttribute('src') || '').trim();
       const text = (element.textContent || '').toLowerCase();
       const lower = href.toLowerCase();
       const score = (element.hasAttribute('download') ? 100 : 0) + (text.includes('download') ? 40 : 0) +
         (lower.includes('download') ? 30 : 0) + (lower.endsWith('.pdf') ? 25 : 0) + (lower.includes('/pdf') ? 15 : 0);
       return { href, score };
-    }).filter((item) => item.href).sort((a, b) => b.score - a.score);
-    return candidates[0]?.href || '';
-  });
-  return candidate ? new URL(candidate, page.url()).href : '';
+    }).filter((item) => item.href && item.score > 0).sort((a, b) => b.score - a.score)
+  ));
+  const urls = [];
+  for (const candidate of Array.isArray(candidates) ? candidates : []) {
+    try {
+      const url = new URL(candidate.href, page.url()).href;
+      if (/^https?:/i.test(url) && !urls.includes(url)) urls.push(url);
+    } catch { /* ignore malformed link candidates */ }
+  }
+  return urls;
+}
+
+async function findDownloadUrl(page, timeout) {
+  return (await findDownloadUrls(page, timeout))[0] || '';
 }
 
 async function positionWindow(context, page, settings) {
@@ -272,6 +282,19 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
       await savePdfFromContext(context, url, outputPath, page.url(), settings.downloadTimeout ?? settings.timeout);
       return true;
     };
+    const candidateErrors = [];
+    const tryDownloadCandidates = async () => {
+      const urls = await findDownloadUrls(page, settings.linkTimeout ?? settings.timeout);
+      for (const url of urls) {
+        try {
+          await savePdfFromContext(context, url, outputPath, page.url(), settings.downloadTimeout ?? settings.timeout);
+          return true;
+        } catch (error) {
+          candidateErrors.push({ url, code: error.code || 'DOWNLOAD_FAILED', reason: error.message });
+        }
+      }
+      return false;
+    };
     const verificationPassed = (verification) => verification === true || verification?.verified === true;
     let navigation;
     let navigationError;
@@ -294,6 +317,9 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
     const protectedStatus = [401, 403, 429].includes(navigationStatus);
     if (blocked || protectedStatus) {
       verificationAttempted = true;
+      if (settings.deferManualReview) {
+        throw downloadError('MANUAL_REVIEW_REQUIRED', protectedStatus ? `source returned HTTP ${navigationStatus}` : 'human verification required');
+      }
       const verification = settings.headless && settings.verifyChallenge
         ? await settings.verifyChallenge(page, doi, protectedStatus ? `source returned HTTP ${navigationStatus}` : 'human verification required')
         : await waitForVerification(page, settings.verificationTimeout, doi, settings.verificationIo || process);
@@ -305,22 +331,30 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
     unavailableReason = await unavailablePageReason(page);
     if (unavailableReason) throw downloadError('SOURCE_NOT_FOUND', unavailableReason);
     if (navigationError) throw navigationError;
-    let downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
-    if (!downloadUrl && await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
-    if (!downloadUrl && !verificationAttempted) {
+    if (await tryDownloadCandidates()) return { doi, ok: true, path: outputPath, source: source.name };
+    if (await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
+    if (!verificationAttempted) {
       verificationAttempted = true;
+      if (settings.deferManualReview) {
+        throw downloadError('MANUAL_REVIEW_REQUIRED', candidateErrors.length
+          ? 'PDF link candidates did not return PDF content'
+          : 'PDF link not found');
+      }
       const verification = settings.headless && settings.verifyChallenge
         ? await settings.verifyChallenge(page, doi, 'PDF link not found; manual review required')
         : await waitForVerification(page, settings.verificationTimeout, doi, settings.verificationIo || process);
       if (verificationPassed(verification)) {
         if (await saveVerifiedPdf(verification)) return { doi, ok: true, path: outputPath, source: source.name };
         if (await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
-        downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
+        if (await tryDownloadCandidates()) return { doi, ok: true, path: outputPath, source: source.name };
       }
     }
-    if (!downloadUrl) throw downloadError('PDF_LINK_NOT_FOUND', 'PDF download link not found');
-    await savePdfFromContext(context, downloadUrl, outputPath, page.url(), settings.downloadTimeout ?? settings.timeout);
-    return { doi, ok: true, path: outputPath, source: source.name };
+    if (candidateErrors.length) {
+      const error = downloadError('PDF_CANDIDATES_INVALID', 'all PDF link candidates returned non-PDF content');
+      error.candidates = candidateErrors;
+      throw error;
+    }
+    throw downloadError('PDF_LINK_NOT_FOUND', 'PDF download link not found');
   } finally { await page.close().catch(() => {}); }
 }
 
@@ -353,6 +387,13 @@ async function downloadWithRetry(context, doi, settings, operation = downloadOne
     roundSources = retryableSources;
     if (round < settings.retries) await sleep(250 * (round + 1));
   }
+  const manualSources = [...new Set(errors.filter((error) => error.code === 'MANUAL_REVIEW_REQUIRED').map((error) => error.source))];
+  if (manualSources.length) {
+    return {
+      doi, ok: false, status: 'manual_required', reason: 'Manual review required',
+      manualSources, attempts, elapsedMs: Date.now() - startedAt, errors,
+    };
+  }
   return {
     doi, ok: false, status: 'source_not_found', reason: 'PDF source not found',
     attempts, elapsedMs: Date.now() - startedAt, errors,
@@ -361,15 +402,78 @@ async function downloadWithRetry(context, doi, settings, operation = downloadOne
 
 async function runBatch(context, dois, settings, operation = downloadOne) {
   const results = new Array(dois.length);
+  const configuredSources = settings.sources?.length
+    ? settings.sources
+    : [{ name: 'default', baseUrl: settings.baseUrl }];
   let cursor = 0;
-  async function worker() {
+  let active = 0;
+  let processed = 0;
+  let targetConcurrency = Math.min(3, settings.concurrency, dois.length);
+  const minimumConcurrency = Math.min(2, targetConcurrency);
+  let successStreak = 0;
+  const progressStream = settings.progressStream || process.stderr;
+  const reportProgress = (finish = false) => {
+    if (!progressStream.isTTY) return;
+    const downloaded = results.filter((item) => item?.ok).length;
+    const missing = results.filter((item) => item?.status === 'source_not_found').length;
+    const manual = results.filter((item) => item?.status === 'manual_required').length;
+    const waiting = Math.max(0, dois.length - processed - active);
+    progressStream.write(`\r\x1b[2KProgress ${processed}/${dois.length} | Active ${active}/${targetConcurrency} | Waiting ${waiting} | Manual ${manual} | Downloaded ${downloaded} | Missing ${missing}${finish ? '\n' : ''}`);
+  };
+  const adjustConcurrency = (result) => {
+    const pressure = result.errors?.some((error) => (
+      error.code === 'HTTP_429' || error.code === 'NAVIGATION_TIMEOUT' ||
+      error.code === 'VERIFICATION_TIMEOUT' || error.code === 'MANUAL_REVIEW_REQUIRED'
+    ));
+    if (pressure) {
+      targetConcurrency = Math.max(minimumConcurrency, targetConcurrency - 1);
+      successStreak = 0;
+    } else if (result.ok) {
+      successStreak += 1;
+      if (successStreak >= 4 && targetConcurrency < settings.concurrency) {
+        targetConcurrency += 1;
+        successStreak = 0;
+      }
+    }
+  };
+  async function worker(workerIndex) {
     while (cursor < dois.length) {
+      while (workerIndex >= targetConcurrency && cursor < dois.length) await sleep(25);
+      if (cursor >= dois.length) return;
       const index = cursor++;
-      results[index] = await downloadWithRetry(context, dois[index], settings, operation);
+      active += 1;
+      reportProgress();
+      results[index] = await downloadWithRetry(context, dois[index], { ...settings, deferManualReview: true }, operation);
+      active -= 1;
+      processed += 1;
+      adjustConcurrency(results[index]);
+      reportProgress();
     }
   }
-  await Promise.all(Array.from({ length: Math.min(settings.concurrency, dois.length) }, worker));
+  reportProgress();
+  await Promise.all(Array.from({ length: Math.min(settings.concurrency, dois.length) }, (_, index) => worker(index)));
+
+  const manualIndices = results.map((result, index) => result?.status === 'manual_required' ? index : -1).filter((index) => index >= 0);
+  for (const index of manualIndices) {
+    const deferred = results[index];
+    const manualSources = configuredSources.filter((source) => deferred.manualSources.includes(source.name));
+    active = 1;
+    reportProgress();
+    const reviewed = await downloadWithRetry(context, dois[index], {
+      ...settings, deferManualReview: false,
+      sources: manualSources.length ? manualSources : configuredSources,
+    }, operation);
+    results[index] = {
+      ...reviewed,
+      attempts: deferred.attempts + reviewed.attempts,
+      elapsedMs: deferred.elapsedMs + reviewed.elapsedMs,
+      errors: [...deferred.errors, ...(reviewed.errors || [])],
+    };
+    active = 0;
+    reportProgress();
+  }
+  reportProgress(true);
   return results;
 }
 
-module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, isBlocked, launchContext, loadedPdfUrl, pdfUrlFromResponse, runBatch, safeFileName, savePdfFromContext, unavailablePageReason, validatePdf, waitForUserConfirmation, waitForVerification };
+module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, findDownloadUrls, isBlocked, launchContext, loadedPdfUrl, pdfUrlFromResponse, runBatch, safeFileName, savePdfFromContext, unavailablePageReason, validatePdf, waitForUserConfirmation, waitForVerification };

@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 
 const DEFAULTS = Object.freeze({
-  concurrency: 3,
+  concurrency: 4,
   retries: 0,
   timeout: 8000,
   linkTimeout: 2500,

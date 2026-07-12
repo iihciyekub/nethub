@@ -8,7 +8,7 @@ const test = require('node:test');
 const { request } = require('playwright');
 const {
   downloadError, downloadOne, downloadWithRetry, isBlocked, safeFileName,
-  pdfUrlFromResponse, savePdfFromContext, unavailablePageReason, validatePdf, waitForVerification,
+  pdfUrlFromResponse, runBatch, savePdfFromContext, unavailablePageReason, validatePdf, waitForVerification,
 } = require('../src/downloader.js');
 
 test('safeFileName is portable and PDF validation rejects HTML', () => {
@@ -53,6 +53,46 @@ test('a PDF opened as the main page downloads without manual confirmation', asyn
   assert.equal(result.ok, true);
   assert.equal(reviews, 0);
   assert.match((await fs.readFile(result.path)).toString('latin1'), /^%PDF-/);
+});
+
+test('PDF link candidates are validated in score order until one succeeds', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'nethub-candidates-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let evaluateCalls = 0;
+  const requested = [];
+  const page = {
+    goto: async () => ({ status: () => 200 }), title: async () => 'Article',
+    locator: (selector) => selector === 'body'
+      ? { innerText: async () => 'Article page' }
+      : { count: async () => 0 },
+    frames: () => [], waitForFunction: async () => {},
+    evaluate: async () => {
+      evaluateCalls += 1;
+      if (evaluateCalls <= 2) return false;
+      return [
+        { href: '/download-page', score: 70 },
+        { href: '/paper.pdf', score: 25 },
+      ];
+    },
+    url: () => 'https://example.test/article', close: async () => {},
+  };
+  const result = await downloadOne({
+    newPage: async () => page,
+    request: { get: async (url) => {
+      requested.push(url);
+      const pdf = url.endsWith('/paper.pdf');
+      return {
+        ok: () => true,
+        body: async () => Buffer.from(pdf ? '%PDF-1.7\nvalid' : '<html>not pdf</html>'),
+        headers: () => ({ 'content-type': pdf ? 'application/pdf' : 'text/html' }),
+      };
+    } },
+  }, '10.1000/candidates', {
+    baseUrl: 'https://example.test', headless: true, timeout: 10, linkTimeout: 1,
+    downloadTimeout: 100, downloadDir: directory,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(requested, ['https://example.test/download-page', 'https://example.test/paper.pdf']);
 });
 
 test('verification detection recognizes human-check wording', async () => {
@@ -293,4 +333,46 @@ test('terminal failures try every source once and finish as source_not_found', a
   assert.equal(result.reason, 'PDF source not found');
   assert.equal(result.attempts, 2);
   assert.ok(result.elapsedMs >= 0);
+});
+
+test('manual reviews are deferred until background workers finish', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'nethub-manual-queue-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const events = [];
+  const result = await runBatch({}, ['10.1/manual', '10.1/one', '10.1/two'], {
+    downloadDir: directory, retries: 0, skipExisting: false, concurrency: 3,
+    baseUrl: 'https://one.test', sources: [{ name: 'one', baseUrl: 'https://one.test' }],
+    progressStream: { isTTY: false, write: () => {} },
+  }, async (_context, doi, settings) => {
+    events.push(`${doi}:${settings.deferManualReview}`);
+    if (doi.endsWith('/manual') && settings.deferManualReview) {
+      throw downloadError('MANUAL_REVIEW_REQUIRED', 'human verification required');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return { doi, ok: true, path: 'done' };
+  });
+  assert.ok(result.every((item) => item.ok));
+  assert.equal(events.at(-1), '10.1/manual:false');
+  assert.ok(events.indexOf('10.1/manual:false') > events.indexOf('10.1/two:true'));
+});
+
+test('stable batches adapt from three to four concurrent workers', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'nethub-adaptive-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let active = 0;
+  let maximumActive = 0;
+  const dois = Array.from({ length: 12 }, (_, index) => `10.1/${index}`);
+  const results = await runBatch({}, dois, {
+    downloadDir: directory, retries: 0, skipExisting: false, concurrency: 4,
+    baseUrl: 'https://one.test', sources: [{ name: 'one', baseUrl: 'https://one.test' }],
+    progressStream: { isTTY: false, write: () => {} },
+  }, async (_context, doi) => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    active -= 1;
+    return { doi, ok: true, path: 'done' };
+  });
+  assert.ok(results.every((item) => item.ok));
+  assert.equal(maximumActive, 4);
 });

@@ -18,7 +18,7 @@ Options:
   --source NAME                Try this configured source first
   --download-dir DIR           Output directory (default: ./downloads)
   --input FILE                 Extract DOIs from all file text; repeatable
-  --concurrency N              Concurrent workers (default: 3)
+  --concurrency N              Maximum pages (default: 4; starts at 3)
   --retries N                  Extra retry rounds (default: 0)
   --timeout MS                 Page navigation timeout (default: 8000)
   --link-timeout MS            PDF link detection wait (default: 2500)

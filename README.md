@@ -16,7 +16,7 @@ A lightweight, resilient CLI for batch-downloading DOI PDFs. It stays in the bac
 
 - 默认使用无头 Chromium 在后台下载。
 - 检测到 CAPTCHA 或浏览器验证时，自动弹出一个可见窗口；完成验证后继续后台任务。
-- 默认 3 个并发页面，可配置为 1–4 个；所有页面共享登录状态和 Cookie。
+- 自适应使用 2–4 个并发页面：默认从 3 个开始，稳定时升到 4 个，遇到限流、验证或导航超时降到 2 个。
 - 支持多个下载源，当前源异常时自动尝试下一个。
 - 支持命令行 DOI、DOI URL、TXT、CSV 和混合文本输入。
 - 可指定下载目录，自动跳过已有 PDF，也可以强制覆盖。
@@ -25,6 +25,8 @@ A lightweight, resilient CLI for batch-downloading DOI PDFs. It stays in the bac
 - 未配置下载源时自动从标准 `https://doi.org` 解析 DOI。
 - 自动识别主页面或网络响应中已经打开的 PDF，无需额外人工确认。
 - 明确显示“论文尚未收录/数据库中不可用”的页面会立即标记为来源缺失，不触发人工确认。
+- 多个 PDF 候选会按可信度逐个验证，某个链接返回 HTML 时继续尝试下一个。
+- 需要人工确认的 DOI 会先挂起，不占用后台下载 worker；普通任务完成后再串行处理。
 
 ### 环境要求
 
@@ -73,7 +75,7 @@ export NETHUB_CONFIG=/absolute/path/to/nethub.config.json
 ```json
 {
   "downloadDir": "./downloads",
-  "concurrency": 3,
+  "concurrency": 4,
   "retries": 0,
   "timeout": 8000,
   "linkTimeout": 2500,
@@ -109,7 +111,7 @@ nethub download --source backup --input dois.txt
 nethub download --json "10.1000/example"
 ```
 
-通常不需要 `--show`。netHub 会保持后台运行；检测到验证码、人工验证、HTTP 401/403/429，或页面打开后仍找不到 PDF 链接时，只弹出一次可见窗口。完成浏览器验证或人工检查后，回到终端按 Enter 明确确认；窗口不会因为几秒钟的自动检测而提前关闭。确认后验证状态以及验证窗口中已打开的 PDF 会同步回后台，再继续下载。任务完成后标准输入会恢复暂停，CLI 会立即退出并交还终端。如果希望观察完整过程，可使用：
+通常不需要 `--show`。netHub 会保持后台运行；检测到验证码、人工验证、HTTP 401/403/429，或页面打开后仍找不到 PDF 链接时，先将任务移入独立人工队列，不占用后台 worker。普通任务处理完后才逐个弹出可见窗口。完成验证或检查后，回到终端按 Enter 明确确认。确认后验证状态以及窗口中已打开的 PDF 会同步回后台。任务完成后 CLI 会立即退出并交还终端。如果希望观察完整过程，可使用：
 
 ```sh
 nethub download --show --profile-dir ~/.nethub-profile 10.1000/example
@@ -146,7 +148,7 @@ nethub update
 
 - Runs headless Chromium in the background by default.
 - Opens one visible window only when a CAPTCHA or browser challenge is detected, then returns to background downloading.
-- Uses 3 concurrent pages by default, configurable from 1 to 4; pages share cookies and login state.
+- Adapts between 2 and 4 pages: starts at 3, rises to 4 after stable successes, and drops to 2 under rate limits, verification, or navigation timeouts.
 - Automatically tries the next configured source when the current source fails.
 - Accepts DOI arguments, DOI URLs, TXT, CSV, and mixed-text input files.
 - Supports a custom output directory, existing-file skipping, and forced replacement.
@@ -155,6 +157,8 @@ nethub update
 - Resolves through standard `https://doi.org` when no source is configured.
 - Detects PDFs already opened as the main page or observed in network responses without unnecessary manual confirmation.
 - Treats explicit paper-unavailable/database-missing pages as source misses immediately without manual review.
+- Validates multiple PDF candidates in score order instead of failing on the first HTML response.
+- Defers manual-review DOI values without consuming background workers, then handles them serially after the normal queue.
 
 ### Requirements
 
@@ -177,7 +181,7 @@ netHub works without a config file by resolving through `https://doi.org`. Confi
 ```json
 {
   "downloadDir": "./downloads",
-  "concurrency": 3,
+  "concurrency": 4,
   "retries": 0,
   "timeout": 8000,
   "linkTimeout": 2500,
@@ -202,7 +206,7 @@ nethub download --source backup --input dois.txt
 nethub download --json "10.1000/example"
 ```
 
-The browser remains hidden unless manual review is needed. A visible window opens once for a CAPTCHA, human check, HTTP 401/403/429 response, or a page with no detected PDF link. Finish the browser verification or inspection, then return to the terminal and press Enter explicitly; the window will not close after a short automatic check. Browser state and any PDF opened in the verification window are passed back before background downloading resumes. Standard input is paused again on completion so the CLI exits and returns the terminal immediately. Use `--show` to watch the entire run, and `--profile-dir` to preserve a login profile.
+The browser remains hidden unless manual review is needed. CAPTCHA, human-check, HTTP 401/403/429, and unresolved-link tasks are parked without consuming background workers. After the normal queue finishes, visible reviews run one at a time. Finish the browser verification or inspection, return to the terminal, and press Enter explicitly. Browser state and any opened PDF are passed back before completion. Use `--show` to watch the entire run, and `--profile-dir` to preserve a login profile.
 
 Always quote a DOI containing shell metacharacters such as parentheses or asterisks:
 
