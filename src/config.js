@@ -27,6 +27,19 @@ async function loadConfig(configPath) {
   }
 }
 
+async function findConfigPath(explicitPath, env = process.env, cwd = process.cwd(), home = require('node:os').homedir(), access = fs.access) {
+  const selected = explicitPath || env.NETHUB_CONFIG;
+  if (selected) return path.resolve(cwd, selected);
+  const candidates = [
+    path.join(cwd, 'nethub.config.json'),
+    path.join(home, '.config', 'nethub', 'config.json'),
+  ];
+  for (const candidate of candidates) {
+    try { await access(candidate); return candidate; } catch { /* try the next location */ }
+  }
+  return candidates[0];
+}
+
 function integer(value, name, minimum) {
   const parsed = Number.parseInt(String(value), 10);
   if (!Number.isInteger(parsed) || parsed < minimum) throw new Error(`${name} must be an integer >= ${minimum}`);
@@ -105,4 +118,4 @@ function resolveSettings(cli, config, env = process.env, cwd = process.cwd()) {
   };
 }
 
-module.exports = { DEFAULTS, DEFAULT_SOURCE, loadConfig, resolveSettings };
+module.exports = { DEFAULTS, DEFAULT_SOURCE, findConfigPath, loadConfig, resolveSettings };
