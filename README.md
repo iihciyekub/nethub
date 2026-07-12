@@ -113,7 +113,7 @@ nethub download --source backup --input dois.txt
 nethub download --json "10.1000/example"
 ```
 
-通常不需要 `--show`。netHub 会保持后台运行；只有明确检测到 CAPTCHA、机器人验证或登录表单时，才将任务移入独立人工队列。普通 HTML 页面没有 PDF、数据库明确未收录、或者候选链接全部不是 PDF 时，会直接标记当前源失败，不打扰用户。真正需要人工处理的任务会在普通队列完成后逐个弹窗；完成验证后回到终端按 Enter。验证状态以及窗口中已打开的 PDF 会同步回后台。
+通常不需要 `--show`。netHub 会保持后台运行；只有明确检测到 CAPTCHA、机器人验证或登录表单时，才将任务移入独立人工队列。普通 HTML 页面没有 PDF、数据库明确未收录、或者候选链接全部不是 PDF 时，会直接标记当前源失败，不打扰用户。真正需要人工处理的任务会在普通队列完成后逐个弹窗；完成验证后，netHub 会持续检测验证是否消失或 PDF 是否已经打开，并自动继续后台下载，无需回到终端。也可以随时按 Enter 手动继续。验证状态以及窗口中已打开的 PDF 会同步回后台。
 
 ```sh
 nethub download --show --profile-dir ~/.nethub-profile 10.1000/example
@@ -210,7 +210,7 @@ nethub download --source backup --input dois.txt
 nethub download --json "10.1000/example"
 ```
 
-The browser remains hidden unless positive CAPTCHA, robot-check, or login evidence requires manual review. Ordinary HTML pages with no PDF, explicit database misses, and exhausted non-PDF candidates fail without prompting. Genuine manual tasks are parked without consuming workers, then handled one at a time after the normal queue. Finish verification, return to the terminal, and press Enter. Browser state and any opened PDF are passed back before completion.
+The browser remains hidden unless positive CAPTCHA, robot-check, or login evidence requires manual review. Ordinary HTML pages with no PDF, explicit database misses, and exhausted non-PDF candidates fail without prompting. Genuine manual tasks are parked without consuming workers, then handled one at a time after the normal queue. After verification, netHub detects either the cleared challenge or an opened PDF and continues automatically; pressing Enter remains available as a manual fallback. Browser state and any opened PDF are passed back before completion.
 
 Always quote a DOI containing shell metacharacters such as parentheses or asterisks:
 

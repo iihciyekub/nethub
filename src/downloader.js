@@ -135,7 +135,7 @@ async function requiresHumanInteraction(page) {
   return /(?:sign|log) in to continue|please (?:sign|log) in|请先?登录|登录后(?:继续|下载)/i.test(text);
 }
 
-function waitForUserConfirmation(input, timeout) {
+function waitForUserConfirmation(input, timeout, signal) {
   return new Promise((resolve) => {
     let settled = false;
     let timer;
@@ -144,30 +144,72 @@ function waitForUserConfirmation(input, timeout) {
       settled = true;
       clearTimeout(timer);
       input.removeListener('data', onData);
+      signal?.removeEventListener('abort', onAbort);
       input.pause?.();
       input.unref?.();
       resolve(confirmed);
     };
     const onData = () => finish(true);
+    const onAbort = () => finish(false);
+    if (signal?.aborted) return finish(false);
     timer = setTimeout(() => finish(false), timeout);
     input.once('data', onData);
+    signal?.addEventListener('abort', onAbort, { once: true });
     input.ref?.();
     input.resume?.();
   });
 }
 
+function abortableDelay(timeout, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    let timer;
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', finish);
+      resolve();
+    };
+    timer = setTimeout(finish, timeout);
+    signal?.addEventListener('abort', finish, { once: true });
+  });
+}
+
+async function waitForAutomaticVerification(page, timeout, signal, pollInterval = 500) {
+  const deadline = Date.now() + timeout;
+  let sawHumanCheck = false;
+  let stablePasses = 0;
+  while (Date.now() < deadline && !signal?.aborted) {
+    if (await loadedPdfUrl(page, null)) return true;
+    const needsHuman = await requiresHumanInteraction(page);
+    if (needsHuman) {
+      sawHumanCheck = true;
+      stablePasses = 0;
+    } else if (sawHumanCheck) {
+      stablePasses += 1;
+      if (stablePasses >= 2) return true;
+    }
+    await abortableDelay(pollInterval, signal);
+  }
+  return false;
+}
+
 async function waitForVerification(page, timeout, doi, io = process) {
   io.stderr.write(`[${doi}] verification window is open for up to ${Math.round(timeout / 1000)} seconds.\n`);
   if (io.stdin?.isTTY) {
-    io.stderr.write(`[${doi}] finish the browser verification, then return here and press Enter.\n`);
-    return waitForUserConfirmation(io.stdin, timeout);
+    io.stderr.write(`[${doi}] complete verification in the browser; continuation is automatic, or press Enter to continue manually.\n`);
+    const controller = new AbortController();
+    const automatic = waitForAutomaticVerification(page, timeout, controller.signal, io.pollInterval || 500)
+      .then((confirmed) => ({ mode: 'automatic', confirmed }));
+    const manual = waitForUserConfirmation(io.stdin, timeout, controller.signal)
+      .then((confirmed) => ({ mode: 'manual', confirmed }));
+    const result = await Promise.race([automatic, manual]);
+    controller.abort();
+    if (result.confirmed && result.mode === 'automatic') {
+      io.stderr.write(`[${doi}] verification passed; continuing automatically.\n`);
+    }
+    return result.confirmed;
   }
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    if (!await isBlocked(page)) return true;
-    await page.waitForTimeout(1000);
-  }
-  return false;
+  return waitForAutomaticVerification(page, timeout);
 }
 
 async function copyBrowserState(fromContext, toContext) {
@@ -513,4 +555,4 @@ async function runBatch(context, dois, settings, operation = downloadOne) {
   return results;
 }
 
-module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, findDownloadUrls, isBlocked, isHumanVerificationText, launchContext, loadedPdfUrl, pdfUrlFromResponse, requiresHumanInteraction, runBatch, safeFileName, savePdfFromContext, unavailablePageReason, unavailableTextReason, validatePdf, waitForUserConfirmation, waitForVerification };
+module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, findDownloadUrls, isBlocked, isHumanVerificationText, launchContext, loadedPdfUrl, pdfUrlFromResponse, requiresHumanInteraction, runBatch, safeFileName, savePdfFromContext, unavailablePageReason, unavailableTextReason, validatePdf, waitForAutomaticVerification, waitForUserConfirmation, waitForVerification };

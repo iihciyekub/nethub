@@ -5,10 +5,11 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { request } = require('playwright');
+const { chromium, request } = require('playwright');
 const {
   downloadError, downloadOne, downloadWithRetry, isBlocked, isHumanVerificationText, safeFileName,
-  pdfUrlFromResponse, runBatch, savePdfFromContext, unavailablePageReason, validatePdf, waitForVerification,
+  pdfUrlFromResponse, runBatch, savePdfFromContext, unavailablePageReason, validatePdf,
+  waitForAutomaticVerification, waitForVerification,
 } = require('../src/downloader.js');
 
 test('safeFileName is portable and PDF validation rejects HTML', () => {
@@ -147,7 +148,18 @@ test('an unavailable page fails without opening manual review', async () => {
   assert.equal(reviews, 0);
 });
 
-test('interactive verification waits for explicit terminal confirmation', async () => {
+function verificationPage(state) {
+  return {
+    title: async () => state.blocked ? 'Verify you are human' : 'Article',
+    locator: (selector) => selector === 'body'
+      ? { innerText: async () => state.blocked ? 'Complete the security check' : 'Article ready' }
+      : { count: async () => 0 },
+    frames: () => [], evaluate: async () => false,
+    url: () => 'https://example.test/article',
+  };
+}
+
+test('interactive verification still accepts Enter as a manual fallback', async () => {
   class Input extends EventEmitter {
     constructor() { super(); this.isTTY = true; this.paused = true; this.referenced = false; }
     isPaused() { return this.paused; }
@@ -158,8 +170,8 @@ test('interactive verification waits for explicit terminal confirmation', async 
   }
   const stdin = new Input();
   const output = [];
-  const waiting = waitForVerification({}, 1000, '10.1000/check', {
-    stdin, stderr: { write: (value) => output.push(value) },
+  const waiting = waitForVerification(verificationPage({ blocked: true }), 1000, '10.1000/check', {
+    stdin, stderr: { write: (value) => output.push(value) }, pollInterval: 10,
   });
   let settled = false;
   waiting.finally(() => { settled = true; });
@@ -170,6 +182,51 @@ test('interactive verification waits for explicit terminal confirmation', async 
   assert.equal(stdin.paused, true);
   assert.equal(stdin.referenced, false);
   assert.match(output.join(''), /press Enter/);
+});
+
+test('verification continues automatically after the challenge disappears', async () => {
+  class Input extends EventEmitter {
+    constructor() { super(); this.isTTY = true; this.paused = true; this.referenced = false; }
+    resume() { this.paused = false; }
+    pause() { this.paused = true; }
+    ref() { this.referenced = true; }
+    unref() { this.referenced = false; }
+  }
+  const state = { blocked: true };
+  const stdin = new Input();
+  const output = [];
+  setTimeout(() => { state.blocked = false; }, 30);
+  assert.equal(await waitForVerification(verificationPage(state), 1000, '10.1000/auto', {
+    stdin, stderr: { write: (value) => output.push(value) }, pollInterval: 10,
+  }), true);
+  assert.equal(stdin.paused, true);
+  assert.equal(stdin.referenced, false);
+  assert.match(output.join(''), /continuing automatically/);
+});
+
+test('automatic verification recognizes a PDF opened in the browser', async () => {
+  const page = verificationPage({ blocked: true });
+  page.evaluate = async () => true;
+  page.url = () => 'https://example.test/paper';
+  assert.equal(await waitForAutomaticVerification(page, 100), true);
+});
+
+test('a real browser continues after a verification page navigates away', async (t) => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    if (req.url === '/challenge') {
+      return res.end('<title>Verify you are human</title><body>あなたはロボットですか？<script>setTimeout(() => location.href = "/article", 100)</script></body>');
+    }
+    res.end('<title>Article</title><body>Article ready</body>');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.goto(`http://127.0.0.1:${server.address().port}/challenge`);
+  assert.equal(await waitForAutomaticVerification(page, 2000, null, 50), true);
+  assert.match(page.url(), /\/article$/);
 });
 
 test('ordinary missing PDF link fails without manual review', async () => {
