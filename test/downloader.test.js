@@ -66,6 +66,36 @@ test('missing PDF link escalates to one visible manual review', async () => {
   assert.equal(reviews, 1);
 });
 
+test('--show mode also waits for Enter when no PDF link is detected', async () => {
+  class Input extends EventEmitter { constructor() { super(); this.isTTY = true; } resume() {} }
+  const stdin = new Input();
+  const page = {
+    goto: async () => ({ status: () => 200 }),
+    title: async () => 'Manual check',
+    locator: (selector) => selector === 'body'
+      ? { innerText: async () => 'Continue in browser' }
+      : { count: async () => 0 },
+    frames: () => [], waitForFunction: async () => {}, evaluate: async () => '',
+    url: () => 'https://example.test/article', close: async () => {},
+  };
+  const context = {
+    newPage: async () => page,
+    newCDPSession: async () => ({
+      send: async (method) => method === 'Browser.getWindowForTarget' ? { windowId: 1 } : {},
+      detach: async () => {},
+    }),
+  };
+  const startedAt = Date.now();
+  setTimeout(() => stdin.emit('data', Buffer.from('\n')), 40);
+  await assert.rejects(() => downloadOne(context, '10.1000/manual', {
+    baseUrl: 'https://example.test', headless: false, timeout: 10, linkTimeout: 1,
+    verificationTimeout: 1000, downloadDir: '/tmp', windowX: 0, windowY: 0,
+    windowWidth: 800, windowHeight: 600,
+    verificationIo: { stdin, stderr: { write: () => {} } },
+  }), (error) => error.code === 'PDF_LINK_NOT_FOUND');
+  assert.ok(Date.now() - startedAt >= 30);
+});
+
 test('context request follows redirects, reuses cookies, and atomically saves a PDF', async (t) => {
   const pdf = Buffer.from('%PDF-1.7\nlocal fixture');
   const server = http.createServer((req, res) => {

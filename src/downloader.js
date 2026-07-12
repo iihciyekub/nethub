@@ -231,15 +231,17 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
       verificationAttempted = true;
       const verified = settings.headless && settings.verifyChallenge
         ? await settings.verifyChallenge(page, doi, protectedStatus ? `source returned HTTP ${navigationStatus}` : 'human verification required')
-        : await waitForVerification(page, settings.verificationTimeout, doi);
+        : await waitForVerification(page, settings.verificationTimeout, doi, settings.verificationIo || process);
       if (!verified) throw downloadError('VERIFICATION_TIMEOUT', 'manual verification timed out');
       navigationError = null;
     }
     if (navigationError) throw navigationError;
     let downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
-    if (!downloadUrl && settings.headless && settings.verifyChallenge && !verificationAttempted) {
+    if (!downloadUrl && !verificationAttempted) {
       verificationAttempted = true;
-      const verified = await settings.verifyChallenge(page, doi, 'PDF link not found; manual review required');
+      const verified = settings.headless && settings.verifyChallenge
+        ? await settings.verifyChallenge(page, doi, 'PDF link not found; manual review required')
+        : await waitForVerification(page, settings.verificationTimeout, doi, settings.verificationIo || process);
       if (verified) downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
     }
     if (!downloadUrl) throw downloadError('PDF_LINK_NOT_FOUND', 'PDF download link not found');
