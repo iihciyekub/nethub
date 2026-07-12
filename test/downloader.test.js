@@ -68,10 +68,12 @@ test('verification detection recognizes human-check wording', async () => {
 
 test('interactive verification waits for explicit terminal confirmation', async () => {
   class Input extends EventEmitter {
-    constructor() { super(); this.isTTY = true; this.paused = true; }
+    constructor() { super(); this.isTTY = true; this.paused = true; this.referenced = false; }
     isPaused() { return this.paused; }
     resume() { this.paused = false; }
     pause() { this.paused = true; }
+    ref() { this.referenced = true; }
+    unref() { this.referenced = false; }
   }
   const stdin = new Input();
   const output = [];
@@ -85,6 +87,7 @@ test('interactive verification waits for explicit terminal confirmation', async 
   stdin.emit('data', Buffer.from('\n'));
   assert.equal(await waiting, true);
   assert.equal(stdin.paused, true);
+  assert.equal(stdin.referenced, false);
   assert.match(output.join(''), /press Enter/);
 });
 
@@ -138,10 +141,12 @@ test('a PDF found in the verification window is returned to the background downl
 
 test('--show mode also waits for Enter when no PDF link is detected', async () => {
   class Input extends EventEmitter {
-    constructor() { super(); this.isTTY = true; this.paused = true; }
+    constructor() { super(); this.isTTY = true; this.paused = true; this.referenced = false; }
     isPaused() { return this.paused; }
     resume() { this.paused = false; }
     pause() { this.paused = true; }
+    ref() { this.referenced = true; }
+    unref() { this.referenced = false; }
   }
   const stdin = new Input();
   const page = {

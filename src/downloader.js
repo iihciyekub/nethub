@@ -103,18 +103,19 @@ function waitForUserConfirmation(input, timeout) {
   return new Promise((resolve) => {
     let settled = false;
     let timer;
-    const wasPaused = input.isPaused?.() ?? true;
     const finish = (confirmed) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       input.removeListener('data', onData);
-      if (wasPaused) input.pause?.();
+      input.pause?.();
+      input.unref?.();
       resolve(confirmed);
     };
     const onData = () => finish(true);
     timer = setTimeout(() => finish(false), timeout);
     input.once('data', onData);
+    input.ref?.();
     input.resume?.();
   });
 }
