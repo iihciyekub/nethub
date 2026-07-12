@@ -3,6 +3,7 @@ const { findConfigPath, loadConfig, resolveSettings } = require('./config.js');
 const { collectDois } = require('./doi.js');
 const { downloadBatch } = require('./index.js');
 const { updateNethub } = require('./update.js');
+const { version: PACKAGE_VERSION } = require('../package.json');
 
 const HELP = `netHub DOI PDF downloader
 
@@ -30,6 +31,7 @@ Options:
   --window-x N                 Visible browser X position
   --window-y N                 Visible browser Y position
   --help                       Show this help
+  --version                    Show the installed netHub version
 
 Update options:
   --check                      Check the latest release without installing
@@ -41,6 +43,7 @@ NETHUB_SOURCE, NETHUB_DOWNLOAD_DIR, NETHUB_CONCURRENCY, and NETHUB_PROFILE_DIR.`
 
 function parseArgs(argv) {
   if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') return { help: true };
+  if (argv[0] === '--version' || argv[0] === '-v') return { version: true };
   if (argv[0] === 'update') {
     const unknown = argv.slice(1).find((arg) => arg !== '--check');
     if (unknown) throw new Error(`unknown update option: ${unknown}`);
@@ -82,6 +85,7 @@ function parseArgs(argv) {
 async function main(argv, io = process) {
   const cli = parseArgs(argv);
   if (cli.help) { io.stdout.write(`${HELP}\n`); return null; }
+  if (cli.version) { io.stdout.write(`netHub ${PACKAGE_VERSION}\n`); return { version: PACKAGE_VERSION }; }
   if (cli.command === 'update') return updateNethub({ checkOnly: cli.check, stdout: io.stdout });
   const configPath = await findConfigPath(cli.configPath);
   const config = await loadConfig(configPath);

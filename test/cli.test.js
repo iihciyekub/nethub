@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const test = require('node:test');
-const { parseArgs } = require('../src/cli.js');
+const { main, parseArgs } = require('../src/cli.js');
 
 test('download parser accepts repeated input and mixed positional DOIs', () => {
   const parsed = parseArgs(['download', '--input', 'a.txt', '10.1234/one', '--input', 'b.csv', '--json']);
@@ -23,4 +23,11 @@ test('update command supports check-only mode', () => {
   assert.deepEqual(parseArgs(['update']), { command: 'update', check: false });
   assert.deepEqual(parseArgs(['update', '--check']), { command: 'update', check: true });
   assert.throws(() => parseArgs(['update', '--force']), /unknown update option/);
+});
+
+test('version command reports the installed package version', async () => {
+  let output = '';
+  const result = await main(['--version'], { stdout: { write: (value) => { output += value; } } });
+  assert.match(output, /^netHub \d+\.\d+\.\d+\n$/);
+  assert.equal(result.version, require('../package.json').version);
 });
