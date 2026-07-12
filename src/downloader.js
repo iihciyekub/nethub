@@ -64,7 +64,13 @@ async function savePdfFromContext(context, url, outputPath, referer, timeout) {
     throw downloadError(`HTTP_${status}`, `HTTP ${status} ${response.statusText()}`, status === 429 || status >= 500);
   }
   const buffer = await response.body();
-  validatePdf(buffer, response.headers()['content-type'] || '');
+  const contentType = response.headers()['content-type'] || '';
+  try {
+    validatePdf(buffer, contentType);
+  } catch (error) {
+    if (/text\/|html|json|xml/i.test(contentType)) error.responseText = buffer.subarray(0, 65536).toString('utf8');
+    throw error;
+  }
   await atomicWrite(outputPath, buffer);
 }
 
@@ -85,11 +91,10 @@ async function loadedPdfUrl(page, navigation, observedPdfUrl = '') {
     document.contentType === 'application/pdf' ||
     Boolean(document.querySelector('embed[type="application/pdf"], pdf-viewer'))
   )).catch(() => false);
-  return viewerOpen && /^https?:/i.test(page.url()) ? page.url() : '';
+  return viewerOpen === true && /^https?:/i.test(page.url()) ? page.url() : '';
 }
 
-async function unavailablePageReason(page) {
-  const text = `${await page.title().catch(() => '')}\n${await page.locator('body').innerText().catch(() => '')}`;
+function unavailableTextReason(text) {
   const unavailable = [
     /the\s+following\s+(?:paper|article)\s+is\s+not\s+yet\s+available\s+in\s+(?:my|our|the)\s+database/i,
     /(?:paper|article)\s+(?:is|was)\s+not\s+(?:yet\s+)?available\s+in\s+(?:my|our|the)\s+database/i,
@@ -101,6 +106,15 @@ async function unavailablePageReason(page) {
   return unavailable ? 'source reports that the paper is unavailable' : '';
 }
 
+async function unavailablePageReason(page) {
+  const text = `${await page.title().catch(() => '')}\n${await page.locator('body').innerText().catch(() => '')}`;
+  return unavailableTextReason(text);
+}
+
+function isHumanVerificationText(text) {
+  return /DDoS-Guard|Checking your browser|Please wait a few seconds|Just a moment|not a robot|robot check|captcha|recaptcha|hcaptcha|verify (that )?you are human|are you (a )?human|human verification|security (check|verification)|是否.{0,6}机器人|确认.{0,6}(真人|人类)|真人验证|人机验证|安全验证|点击.{0,8}(验证|确认)|あなたはロボットですか|ロボットではありません|人間であることを確認/i.test(text);
+}
+
 async function isBlocked(page) {
   const source = `${await page.title().catch(() => '')}\n${await page.locator('body').innerText().catch(() => '')}\n${page.frames().map((frame) => frame.url()).join('\n')}`;
   const markerSelector = [
@@ -109,7 +123,16 @@ async function isBlocked(page) {
     '#challenge-stage', '#challenge-running',
   ].join(', ');
   const hasMarker = await page.locator(markerSelector).count().then((count) => count > 0).catch(() => false);
-  return hasMarker || /DDoS-Guard|Checking your browser|Please wait a few seconds|Just a moment|not a robot|robot check|captcha|recaptcha|hcaptcha|verify (that )?you are human|are you (a )?human|human verification|security (check|verification)|是否.{0,6}机器人|确认.{0,6}(真人|人类)|真人验证|人机验证|安全验证|点击.{0,8}(验证|确认)/i.test(source);
+  return hasMarker || isHumanVerificationText(source);
+}
+
+async function requiresHumanInteraction(page) {
+  if (await isBlocked(page)) return true;
+  const loginSelector = 'input[type="password"], form[action*="login" i], form[action*="signin" i]';
+  const hasLoginForm = await page.locator(loginSelector).count().then((count) => count > 0).catch(() => false);
+  if (hasLoginForm) return true;
+  const text = `${await page.title().catch(() => '')}\n${await page.locator('body').innerText().catch(() => '')}`;
+  return /(?:sign|log) in to continue|please (?:sign|log) in|请先?登录|登录后(?:继续|下载)/i.test(text);
 }
 
 function waitForUserConfirmation(input, timeout) {
@@ -290,7 +313,10 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
           await savePdfFromContext(context, url, outputPath, page.url(), settings.downloadTimeout ?? settings.timeout);
           return true;
         } catch (error) {
-          candidateErrors.push({ url, code: error.code || 'DOWNLOAD_FAILED', reason: error.message });
+          candidateErrors.push({
+            url, code: error.code || 'DOWNLOAD_FAILED', reason: error.message,
+            responseText: error.responseText || '',
+          });
         }
       }
       return false;
@@ -313,15 +339,14 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
     let unavailableReason = await unavailablePageReason(page);
     if (unavailableReason) throw downloadError('SOURCE_NOT_FOUND', unavailableReason);
     let verificationAttempted = false;
-    const blocked = await isBlocked(page);
-    const protectedStatus = [401, 403, 429].includes(navigationStatus);
-    if (blocked || protectedStatus) {
+    const needsHuman = await requiresHumanInteraction(page);
+    if (needsHuman) {
       verificationAttempted = true;
       if (settings.deferManualReview) {
-        throw downloadError('MANUAL_REVIEW_REQUIRED', protectedStatus ? `source returned HTTP ${navigationStatus}` : 'human verification required');
+        throw downloadError('MANUAL_REVIEW_REQUIRED', 'human verification or login required');
       }
       const verification = settings.headless && settings.verifyChallenge
-        ? await settings.verifyChallenge(page, doi, protectedStatus ? `source returned HTTP ${navigationStatus}` : 'human verification required')
+        ? await settings.verifyChallenge(page, doi, 'human verification or login required')
         : await waitForVerification(page, settings.verificationTimeout, doi, settings.verificationIo || process);
       if (!verificationPassed(verification)) throw downloadError('VERIFICATION_TIMEOUT', 'manual verification timed out');
       if (await saveVerifiedPdf(verification)) return { doi, ok: true, path: outputPath, source: source.name };
@@ -333,20 +358,22 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
     if (navigationError) throw navigationError;
     if (await tryDownloadCandidates()) return { doi, ok: true, path: outputPath, source: source.name };
     if (await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
+    const candidateText = candidateErrors.map((error) => error.responseText).filter(Boolean).join('\n');
+    unavailableReason = unavailableTextReason(candidateText);
+    if (unavailableReason) throw downloadError('SOURCE_NOT_FOUND', unavailableReason);
+    const lateHumanCheck = await requiresHumanInteraction(page) || isHumanVerificationText(candidateText);
     if (!verificationAttempted) {
-      verificationAttempted = true;
-      if (settings.deferManualReview) {
-        throw downloadError('MANUAL_REVIEW_REQUIRED', candidateErrors.length
-          ? 'PDF link candidates did not return PDF content'
-          : 'PDF link not found');
-      }
-      const verification = settings.headless && settings.verifyChallenge
-        ? await settings.verifyChallenge(page, doi, 'PDF link not found; manual review required')
-        : await waitForVerification(page, settings.verificationTimeout, doi, settings.verificationIo || process);
-      if (verificationPassed(verification)) {
-        if (await saveVerifiedPdf(verification)) return { doi, ok: true, path: outputPath, source: source.name };
-        if (await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
-        if (await tryDownloadCandidates()) return { doi, ok: true, path: outputPath, source: source.name };
+      if (lateHumanCheck) {
+        verificationAttempted = true;
+        if (settings.deferManualReview) throw downloadError('MANUAL_REVIEW_REQUIRED', 'human verification or login required');
+        const verification = settings.headless && settings.verifyChallenge
+          ? await settings.verifyChallenge(page, doi, 'human verification or login required')
+          : await waitForVerification(page, settings.verificationTimeout, doi, settings.verificationIo || process);
+        if (verificationPassed(verification)) {
+          if (await saveVerifiedPdf(verification)) return { doi, ok: true, path: outputPath, source: source.name };
+          if (await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
+          if (await tryDownloadCandidates()) return { doi, ok: true, path: outputPath, source: source.name };
+        }
       }
     }
     if (candidateErrors.length) {
@@ -486,4 +513,4 @@ async function runBatch(context, dois, settings, operation = downloadOne) {
   return results;
 }
 
-module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, findDownloadUrls, isBlocked, launchContext, loadedPdfUrl, pdfUrlFromResponse, runBatch, safeFileName, savePdfFromContext, unavailablePageReason, validatePdf, waitForUserConfirmation, waitForVerification };
+module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, findDownloadUrls, isBlocked, isHumanVerificationText, launchContext, loadedPdfUrl, pdfUrlFromResponse, requiresHumanInteraction, runBatch, safeFileName, savePdfFromContext, unavailablePageReason, unavailableTextReason, validatePdf, waitForUserConfirmation, waitForVerification };

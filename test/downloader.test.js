@@ -7,7 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { request } = require('playwright');
 const {
-  downloadError, downloadOne, downloadWithRetry, isBlocked, safeFileName,
+  downloadError, downloadOne, downloadWithRetry, isBlocked, isHumanVerificationText, safeFileName,
   pdfUrlFromResponse, runBatch, savePdfFromContext, unavailablePageReason, validatePdf, waitForVerification,
 } = require('../src/downloader.js');
 
@@ -104,6 +104,22 @@ test('verification detection recognizes human-check wording', async () => {
     frames: () => [],
   };
   assert.equal(await isBlocked(page), true);
+  assert.equal(isHumanVerificationText('あなたはロボットですか？ いいえ'), true);
+});
+
+test('Japanese robot-check page is deferred for genuine manual verification', async () => {
+  const page = {
+    goto: async () => ({ status: () => 200 }), title: async () => 'あなたはロボットですか？',
+    locator: (selector) => selector === 'body'
+      ? { innerText: async () => 'あなたはロボットですか？ いいえ' }
+      : { count: async () => 0 },
+    frames: () => [], evaluate: async () => false,
+    url: () => 'https://example.test/check', close: async () => {},
+  };
+  await assert.rejects(() => downloadOne({ newPage: async () => page }, '10.1000/check', {
+    baseUrl: 'https://example.test', headless: true, timeout: 10,
+    downloadTimeout: 100, downloadDir: '/tmp', deferManualReview: true,
+  }), (error) => error.code === 'MANUAL_REVIEW_REQUIRED');
 });
 
 test('an explicit database-unavailable page is recognized as source not found', async () => {
@@ -156,7 +172,7 @@ test('interactive verification waits for explicit terminal confirmation', async 
   assert.match(output.join(''), /press Enter/);
 });
 
-test('missing PDF link escalates to one visible manual review', async () => {
+test('ordinary missing PDF link fails without manual review', async () => {
   let reviews = 0;
   const page = {
     goto: async () => ({ status: () => 200 }),
@@ -175,16 +191,67 @@ test('missing PDF link escalates to one visible manual review', async () => {
     verificationTimeout: 100, downloadDir: '/tmp',
     verifyChallenge: async () => { reviews += 1; return true; },
   }), (error) => error.code === 'PDF_LINK_NOT_FOUND');
-  assert.equal(reviews, 1);
+  assert.equal(reviews, 0);
+});
+
+test('unavailable text returned by a candidate is classified without manual review', async () => {
+  let evaluateCalls = 0;
+  let reviews = 0;
+  const page = {
+    goto: async () => ({ status: () => 200 }), title: async () => 'Article',
+    locator: (selector) => selector === 'body'
+      ? { innerText: async () => 'Article page' }
+      : { count: async () => 0 },
+    frames: () => [], waitForFunction: async () => {},
+    evaluate: async () => (++evaluateCalls <= 2 ? false : [{ href: '/download', score: 70 }]),
+    url: () => 'https://example.test/article', close: async () => {},
+  };
+  await assert.rejects(() => downloadOne({
+    newPage: async () => page,
+    request: { get: async () => ({
+      ok: () => true,
+      body: async () => Buffer.from('the following paper is not yet available in my database'),
+      headers: () => ({ 'content-type': 'text/html' }),
+    }) },
+  }, '10.1000/candidate-missing', {
+    baseUrl: 'https://example.test', headless: true, timeout: 10, linkTimeout: 1,
+    downloadTimeout: 100, downloadDir: '/tmp',
+    verifyChallenge: async () => { reviews += 1; return true; },
+  }), (error) => error.code === 'SOURCE_NOT_FOUND');
+  assert.equal(reviews, 0);
+});
+
+test('robot-check text returned by a candidate is the only kind escalated', async () => {
+  let evaluateCalls = 0;
+  const page = {
+    goto: async () => ({ status: () => 200 }), title: async () => 'Article',
+    locator: (selector) => selector === 'body'
+      ? { innerText: async () => 'Article page' }
+      : { count: async () => 0 },
+    frames: () => [], waitForFunction: async () => {},
+    evaluate: async () => (++evaluateCalls <= 2 ? false : [{ href: '/download', score: 70 }]),
+    url: () => 'https://example.test/article', close: async () => {},
+  };
+  await assert.rejects(() => downloadOne({
+    newPage: async () => page,
+    request: { get: async () => ({
+      ok: () => true,
+      body: async () => Buffer.from('あなたはロボットですか？ いいえ'),
+      headers: () => ({ 'content-type': 'text/html' }),
+    }) },
+  }, '10.1000/candidate-check', {
+    baseUrl: 'https://example.test', headless: true, timeout: 10, linkTimeout: 1,
+    downloadTimeout: 100, downloadDir: '/tmp', deferManualReview: true,
+  }), (error) => error.code === 'MANUAL_REVIEW_REQUIRED');
 });
 
 test('a PDF found in the verification window is returned to the background downloader', async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'nethub-verified-pdf-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const page = {
-    goto: async () => ({ status: () => 200 }), title: async () => 'Article',
+    goto: async () => ({ status: () => 200 }), title: async () => 'Verify you are human',
     locator: (selector) => selector === 'body'
-      ? { innerText: async () => 'Article page' }
+      ? { innerText: async () => 'Complete the security check' }
       : { count: async () => 0 },
     frames: () => [], waitForFunction: async () => {}, evaluate: async () => false,
     url: () => 'https://example.test/article', close: async () => {},
@@ -204,16 +271,7 @@ test('a PDF found in the verification window is returned to the background downl
   assert.match((await fs.readFile(result.path)).toString('latin1'), /^%PDF-/);
 });
 
-test('--show mode also waits for Enter when no PDF link is detected', async () => {
-  class Input extends EventEmitter {
-    constructor() { super(); this.isTTY = true; this.paused = true; this.referenced = false; }
-    isPaused() { return this.paused; }
-    resume() { this.paused = false; }
-    pause() { this.paused = true; }
-    ref() { this.referenced = true; }
-    unref() { this.referenced = false; }
-  }
-  const stdin = new Input();
+test('--show mode does not wait for Enter on an ordinary no-PDF page', async () => {
   const page = {
     goto: async () => ({ status: () => 200 }),
     title: async () => 'Manual check',
@@ -231,14 +289,12 @@ test('--show mode also waits for Enter when no PDF link is detected', async () =
     }),
   };
   const startedAt = Date.now();
-  setTimeout(() => stdin.emit('data', Buffer.from('\n')), 40);
   await assert.rejects(() => downloadOne(context, '10.1000/manual', {
     baseUrl: 'https://example.test', headless: false, timeout: 10, linkTimeout: 1,
     verificationTimeout: 1000, downloadDir: '/tmp', windowX: 0, windowY: 0,
     windowWidth: 800, windowHeight: 600,
-    verificationIo: { stdin, stderr: { write: () => {} } },
   }), (error) => error.code === 'PDF_LINK_NOT_FOUND');
-  assert.ok(Date.now() - startedAt >= 30);
+  assert.ok(Date.now() - startedAt < 100);
 });
 
 test('context request follows redirects, reuses cookies, and atomically saves a PDF', async (t) => {

@@ -28,6 +28,7 @@ A lightweight, resilient CLI for batch-downloading DOI PDFs. It stays in the bac
 - 多个 PDF 候选会按可信度逐个验证，某个链接返回 HTML 时继续尝试下一个。
 - 需要人工确认的 DOI 会先挂起，不占用后台下载 worker；普通任务完成后再串行处理。
 - 进度条原地刷新；失败或人工队列消息会先清除进度行并独占一整行，避免日志粘连。
+- 只有明确的 CAPTCHA、机器人验证或登录表单才触发人工窗口；普通无 PDF 页面直接判定来源缺失。
 
 ### 环境要求
 
@@ -112,7 +113,7 @@ nethub download --source backup --input dois.txt
 nethub download --json "10.1000/example"
 ```
 
-通常不需要 `--show`。netHub 会保持后台运行；检测到验证码、人工验证、HTTP 401/403/429，或页面打开后仍找不到 PDF 链接时，先将任务移入独立人工队列，不占用后台 worker。普通任务处理完后才逐个弹出可见窗口。完成验证或检查后，回到终端按 Enter 明确确认。确认后验证状态以及窗口中已打开的 PDF 会同步回后台。任务完成后 CLI 会立即退出并交还终端。如果希望观察完整过程，可使用：
+通常不需要 `--show`。netHub 会保持后台运行；只有明确检测到 CAPTCHA、机器人验证或登录表单时，才将任务移入独立人工队列。普通 HTML 页面没有 PDF、数据库明确未收录、或者候选链接全部不是 PDF 时，会直接标记当前源失败，不打扰用户。真正需要人工处理的任务会在普通队列完成后逐个弹窗；完成验证后回到终端按 Enter。验证状态以及窗口中已打开的 PDF 会同步回后台。
 
 ```sh
 nethub download --show --profile-dir ~/.nethub-profile 10.1000/example
@@ -161,6 +162,7 @@ nethub update
 - Validates multiple PDF candidates in score order instead of failing on the first HTML response.
 - Defers manual-review DOI values without consuming background workers, then handles them serially after the normal queue.
 - Keeps progress on one refreshable row while failure and manual-queue messages print as separate full lines.
+- Opens manual review only for positive CAPTCHA, robot-check, or login evidence; ordinary no-PDF pages fail without prompting.
 
 ### Requirements
 
@@ -208,7 +210,7 @@ nethub download --source backup --input dois.txt
 nethub download --json "10.1000/example"
 ```
 
-The browser remains hidden unless manual review is needed. CAPTCHA, human-check, HTTP 401/403/429, and unresolved-link tasks are parked without consuming background workers. After the normal queue finishes, visible reviews run one at a time. Finish the browser verification or inspection, return to the terminal, and press Enter explicitly. Browser state and any opened PDF are passed back before completion. Use `--show` to watch the entire run, and `--profile-dir` to preserve a login profile.
+The browser remains hidden unless positive CAPTCHA, robot-check, or login evidence requires manual review. Ordinary HTML pages with no PDF, explicit database misses, and exhausted non-PDF candidates fail without prompting. Genuine manual tasks are parked without consuming workers, then handled one at a time after the normal queue. Finish verification, return to the terminal, and press Enter. Browser state and any opened PDF are passed back before completion.
 
 Always quote a DOI containing shell metacharacters such as parentheses or asterisks:
 
