@@ -103,11 +103,13 @@ function waitForUserConfirmation(input, timeout) {
   return new Promise((resolve) => {
     let settled = false;
     let timer;
+    const wasPaused = input.isPaused?.() ?? true;
     const finish = (confirmed) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       input.removeListener('data', onData);
+      if (wasPaused) input.pause?.();
       resolve(confirmed);
     };
     const onData = () => finish(true);
@@ -195,6 +197,7 @@ function createVerificationHandler(primaryContext, settings, chromiumApi = chrom
       };
       let verificationContext;
       let close;
+      let verifiedPdfUrl = '';
       if (settings.profileDir) {
         verificationContext = await chromiumApi.launchPersistentContext(`${settings.profileDir}-verification`, launch);
         close = () => verificationContext.close();
@@ -207,16 +210,22 @@ function createVerificationHandler(primaryContext, settings, chromiumApi = chrom
       try {
         await copyBrowserState(primaryContext, verificationContext);
         const page = await verificationContext.newPage();
+        let observedPdfUrl = '';
+        page.on?.('response', (response) => {
+          const url = pdfUrlFromResponse(response);
+          if (url) observedPdfUrl = url;
+        });
         await positionWindow(verificationContext, page, { ...settings, headless: false });
-        await page.goto(blockedPage.url(), { waitUntil: 'domcontentloaded', timeout: settings.timeout }).catch(() => {});
+        const navigation = await page.goto(blockedPage.url(), { waitUntil: 'domcontentloaded', timeout: settings.timeout }).catch(() => null);
         if (!await waitForVerification(page, settings.verificationTimeout, doi)) return false;
+        verifiedPdfUrl = await loadedPdfUrl(page, navigation, observedPdfUrl);
         await copyBrowserState(verificationContext, primaryContext);
       } finally {
         await close().catch(() => {});
       }
 
-      await blockedPage.reload({ waitUntil: 'domcontentloaded', timeout: settings.timeout }).catch(() => {});
-      return true;
+      if (!verifiedPdfUrl) await blockedPage.reload({ waitUntil: 'domcontentloaded', timeout: settings.timeout }).catch(() => {});
+      return { verified: true, pdfUrl: verifiedPdfUrl };
     };
     queue = queue.then(verify, verify);
     return queue;
@@ -243,6 +252,13 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
       await savePdfFromContext(context, url, outputPath, page.url(), settings.downloadTimeout ?? settings.timeout);
       return true;
     };
+    const saveVerifiedPdf = async (verification) => {
+      const url = typeof verification === 'object' ? verification.pdfUrl : '';
+      if (!url) return false;
+      await savePdfFromContext(context, url, outputPath, page.url(), settings.downloadTimeout ?? settings.timeout);
+      return true;
+    };
+    const verificationPassed = (verification) => verification === true || verification?.verified === true;
     let navigation;
     let navigationError;
     try {
@@ -262,10 +278,11 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
     const protectedStatus = [401, 403, 429].includes(navigationStatus);
     if (blocked || protectedStatus) {
       verificationAttempted = true;
-      const verified = settings.headless && settings.verifyChallenge
+      const verification = settings.headless && settings.verifyChallenge
         ? await settings.verifyChallenge(page, doi, protectedStatus ? `source returned HTTP ${navigationStatus}` : 'human verification required')
         : await waitForVerification(page, settings.verificationTimeout, doi, settings.verificationIo || process);
-      if (!verified) throw downloadError('VERIFICATION_TIMEOUT', 'manual verification timed out');
+      if (!verificationPassed(verification)) throw downloadError('VERIFICATION_TIMEOUT', 'manual verification timed out');
+      if (await saveVerifiedPdf(verification)) return { doi, ok: true, path: outputPath, source: source.name };
       navigationError = null;
     }
     if (await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
@@ -274,10 +291,11 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
     if (!downloadUrl && await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
     if (!downloadUrl && !verificationAttempted) {
       verificationAttempted = true;
-      const verified = settings.headless && settings.verifyChallenge
+      const verification = settings.headless && settings.verifyChallenge
         ? await settings.verifyChallenge(page, doi, 'PDF link not found; manual review required')
         : await waitForVerification(page, settings.verificationTimeout, doi, settings.verificationIo || process);
-      if (verified) {
+      if (verificationPassed(verification)) {
+        if (await saveVerifiedPdf(verification)) return { doi, ok: true, path: outputPath, source: source.name };
         if (await saveLoadedPdf(navigation)) return { doi, ok: true, path: outputPath, source: source.name };
         downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
       }

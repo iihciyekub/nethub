@@ -67,7 +67,12 @@ test('verification detection recognizes human-check wording', async () => {
 });
 
 test('interactive verification waits for explicit terminal confirmation', async () => {
-  class Input extends EventEmitter { constructor() { super(); this.isTTY = true; } resume() {} }
+  class Input extends EventEmitter {
+    constructor() { super(); this.isTTY = true; this.paused = true; }
+    isPaused() { return this.paused; }
+    resume() { this.paused = false; }
+    pause() { this.paused = true; }
+  }
   const stdin = new Input();
   const output = [];
   const waiting = waitForVerification({}, 1000, '10.1000/check', {
@@ -79,6 +84,7 @@ test('interactive verification waits for explicit terminal confirmation', async 
   assert.equal(settled, false);
   stdin.emit('data', Buffer.from('\n'));
   assert.equal(await waiting, true);
+  assert.equal(stdin.paused, true);
   assert.match(output.join(''), /press Enter/);
 });
 
@@ -104,8 +110,39 @@ test('missing PDF link escalates to one visible manual review', async () => {
   assert.equal(reviews, 1);
 });
 
+test('a PDF found in the verification window is returned to the background downloader', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'nethub-verified-pdf-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const page = {
+    goto: async () => ({ status: () => 200 }), title: async () => 'Article',
+    locator: (selector) => selector === 'body'
+      ? { innerText: async () => 'Article page' }
+      : { count: async () => 0 },
+    frames: () => [], waitForFunction: async () => {}, evaluate: async () => false,
+    url: () => 'https://example.test/article', close: async () => {},
+  };
+  const apiResponse = {
+    ok: () => true, body: async () => Buffer.from('%PDF-1.7\nverified fixture'),
+    headers: () => ({ 'content-type': 'application/pdf' }),
+  };
+  const result = await downloadOne({
+    newPage: async () => page, request: { get: async () => apiResponse },
+  }, '10.1000/verified', {
+    baseUrl: 'https://example.test', headless: true, timeout: 10, linkTimeout: 1,
+    verificationTimeout: 100, downloadTimeout: 100, downloadDir: directory,
+    verifyChallenge: async () => ({ verified: true, pdfUrl: 'https://example.test/article' }),
+  });
+  assert.equal(result.ok, true);
+  assert.match((await fs.readFile(result.path)).toString('latin1'), /^%PDF-/);
+});
+
 test('--show mode also waits for Enter when no PDF link is detected', async () => {
-  class Input extends EventEmitter { constructor() { super(); this.isTTY = true; } resume() {} }
+  class Input extends EventEmitter {
+    constructor() { super(); this.isTTY = true; this.paused = true; }
+    isPaused() { return this.paused; }
+    resume() { this.paused = false; }
+    pause() { this.paused = true; }
+  }
   const stdin = new Input();
   const page = {
     goto: async () => ({ status: () => 200 }),
