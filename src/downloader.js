@@ -70,11 +70,39 @@ async function savePdfFromContext(context, url, outputPath, referer, timeout) {
 
 async function isBlocked(page) {
   const source = `${await page.title().catch(() => '')}\n${await page.locator('body').innerText().catch(() => '')}\n${page.frames().map((frame) => frame.url()).join('\n')}`;
-  return /DDoS-Guard|Checking your browser|Please wait a few seconds|not a robot|robot check|captcha|recaptcha|hcaptcha/i.test(source);
+  const markerSelector = [
+    'iframe[src*="captcha" i]', 'iframe[src*="challenge" i]', 'iframe[title*="challenge" i]',
+    '.cf-turnstile', '.g-recaptcha', '[data-sitekey]', '[id*="captcha" i]', '[class*="captcha" i]',
+    '#challenge-stage', '#challenge-running',
+  ].join(', ');
+  const hasMarker = await page.locator(markerSelector).count().then((count) => count > 0).catch(() => false);
+  return hasMarker || /DDoS-Guard|Checking your browser|Please wait a few seconds|Just a moment|not a robot|robot check|captcha|recaptcha|hcaptcha|verify (that )?you are human|are you (a )?human|human verification|security (check|verification)|是否.{0,6}机器人|确认.{0,6}(真人|人类)|真人验证|人机验证|安全验证|点击.{0,8}(验证|确认)/i.test(source);
 }
 
-async function waitForVerification(page, timeout, doi) {
-  process.stderr.write(`[${doi}] verification detected; complete it in the browser within ${Math.round(timeout / 1000)} seconds.\n`);
+function waitForUserConfirmation(input, timeout) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer;
+    const finish = (confirmed) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      input.removeListener('data', onData);
+      resolve(confirmed);
+    };
+    const onData = () => finish(true);
+    timer = setTimeout(() => finish(false), timeout);
+    input.once('data', onData);
+    input.resume?.();
+  });
+}
+
+async function waitForVerification(page, timeout, doi, io = process) {
+  io.stderr.write(`[${doi}] verification window is open for up to ${Math.round(timeout / 1000)} seconds.\n`);
+  if (io.stdin?.isTTY) {
+    io.stderr.write(`[${doi}] finish the browser verification, then return here and press Enter.\n`);
+    return waitForUserConfirmation(io.stdin, timeout);
+  }
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     if (!await isBlocked(page)) return true;
@@ -83,9 +111,15 @@ async function waitForVerification(page, timeout, doi) {
   return false;
 }
 
-async function copyCookies(fromContext, toContext) {
-  const { cookies } = await fromContext.storageState();
+async function copyBrowserState(fromContext, toContext) {
+  const { cookies, origins = [] } = await fromContext.storageState();
   if (cookies.length) await toContext.addCookies(cookies);
+  if (origins.length) {
+    await toContext.addInitScript((storedOrigins) => {
+      const current = storedOrigins.find((item) => item.origin === location.origin);
+      for (const item of current?.localStorage || []) localStorage.setItem(item.name, item.value);
+    }, origins);
+  }
 }
 
 async function findDownloadUrl(page, timeout) {
@@ -131,12 +165,9 @@ async function launchContext(settings, chromiumApi = chromium) {
 
 function createVerificationHandler(primaryContext, settings, chromiumApi = chromium) {
   let queue = Promise.resolve();
-  return (blockedPage, doi) => {
+  return (blockedPage, doi, reason = 'verification required') => {
     const verify = async () => {
-      await blockedPage.reload({ waitUntil: 'domcontentloaded', timeout: settings.timeout }).catch(() => {});
-      if (!await isBlocked(blockedPage)) return true;
-
-      process.stderr.write(`[${doi}] verification detected; opening a visible browser window.\n`);
+      process.stderr.write(`[${doi}] ${reason}; opening a visible browser window.\n`);
       const launch = {
         headless: false,
         args: [`--window-position=${settings.windowX},${settings.windowY}`, `--window-size=${settings.windowWidth},${settings.windowHeight}`],
@@ -154,18 +185,18 @@ function createVerificationHandler(primaryContext, settings, chromiumApi = chrom
       }
 
       try {
-        await copyCookies(primaryContext, verificationContext);
+        await copyBrowserState(primaryContext, verificationContext);
         const page = await verificationContext.newPage();
         await positionWindow(verificationContext, page, { ...settings, headless: false });
-        await page.goto(blockedPage.url(), { waitUntil: 'domcontentloaded', timeout: settings.timeout });
+        await page.goto(blockedPage.url(), { waitUntil: 'domcontentloaded', timeout: settings.timeout }).catch(() => {});
         if (!await waitForVerification(page, settings.verificationTimeout, doi)) return false;
-        await copyCookies(verificationContext, primaryContext);
+        await copyBrowserState(verificationContext, primaryContext);
       } finally {
         await close().catch(() => {});
       }
 
       await blockedPage.reload({ waitUntil: 'domcontentloaded', timeout: settings.timeout }).catch(() => {});
-      return !await isBlocked(blockedPage);
+      return true;
     };
     queue = queue.then(verify, verify);
     return queue;
@@ -181,24 +212,36 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
   try {
     await positionWindow(context, page, settings);
     let navigation;
+    let navigationError;
     try {
       navigation = await page.goto(articleUrl(source.baseUrl, doi), { waitUntil: 'domcontentloaded', timeout: settings.timeout });
     } catch (error) {
       error.code = /timeout/i.test(error.message) ? 'NAVIGATION_TIMEOUT' : 'NAVIGATION_FAILED';
       error.retryable = true;
-      throw error;
+      navigationError = error;
     }
     const navigationStatus = navigation?.status();
     if (navigationStatus === 404 || navigationStatus === 410) {
       throw downloadError('PAGE_NOT_FOUND', `source page returned HTTP ${navigationStatus}`);
     }
-    if (await isBlocked(page)) {
+    let verificationAttempted = false;
+    const blocked = await isBlocked(page);
+    const protectedStatus = [401, 403, 429].includes(navigationStatus);
+    if (blocked || protectedStatus) {
+      verificationAttempted = true;
       const verified = settings.headless && settings.verifyChallenge
-        ? await settings.verifyChallenge(page, doi)
+        ? await settings.verifyChallenge(page, doi, protectedStatus ? `source returned HTTP ${navigationStatus}` : 'human verification required')
         : await waitForVerification(page, settings.verificationTimeout, doi);
-      if (!verified) throw new Error('blocked by protection page');
+      if (!verified) throw downloadError('VERIFICATION_TIMEOUT', 'manual verification timed out');
+      navigationError = null;
     }
-    const downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
+    if (navigationError) throw navigationError;
+    let downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
+    if (!downloadUrl && settings.headless && settings.verifyChallenge && !verificationAttempted) {
+      verificationAttempted = true;
+      const verified = await settings.verifyChallenge(page, doi, 'PDF link not found; manual review required');
+      if (verified) downloadUrl = await findDownloadUrl(page, settings.linkTimeout ?? settings.timeout);
+    }
     if (!downloadUrl) throw downloadError('PDF_LINK_NOT_FOUND', 'PDF download link not found');
     const outputPath = path.join(settings.downloadDir, safeFileName(doi));
     await savePdfFromContext(context, downloadUrl, outputPath, page.url(), settings.downloadTimeout ?? settings.timeout);
@@ -254,4 +297,4 @@ async function runBatch(context, dois, settings, operation = downloadOne) {
   return results;
 }
 
-module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, launchContext, runBatch, safeFileName, savePdfFromContext, validatePdf };
+module.exports = { articleUrl, atomicWrite, createVerificationHandler, downloadError, downloadOne, downloadWithRetry, findDownloadUrl, isBlocked, launchContext, runBatch, safeFileName, savePdfFromContext, validatePdf, waitForUserConfirmation, waitForVerification };

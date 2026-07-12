@@ -107,7 +107,7 @@ nethub download --source backup --input dois.txt
 nethub download --json "10.1000/example"
 ```
 
-通常不需要 `--show`。netHub 会保持后台运行，只在检测到验证页面时弹出窗口。如果希望观察完整过程，可使用：
+通常不需要 `--show`。netHub 会保持后台运行；检测到验证码、人工验证、HTTP 401/403/429，或页面打开后仍找不到 PDF 链接时，只弹出一次可见窗口。完成浏览器验证或人工检查后，回到终端按 Enter 明确确认；窗口不会因为几秒钟的自动检测而提前关闭。确认后验证状态会同步回后台，再继续下载。如果希望观察完整过程，可使用：
 
 ```sh
 nethub download --show --profile-dir ~/.nethub-profile 10.1000/example
@@ -198,7 +198,7 @@ nethub download --source backup --input dois.txt
 nethub download --json "10.1000/example"
 ```
 
-The browser remains hidden unless verification is detected. Use `--show` to watch the entire run, and `--profile-dir` to preserve a login profile.
+The browser remains hidden unless manual review is needed. A visible window opens once for a CAPTCHA, human check, HTTP 401/403/429 response, or a page with no detected PDF link. Finish the browser verification or inspection, then return to the terminal and press Enter explicitly; the window will not close after a short automatic check. Browser state is copied back before background downloading resumes. Use `--show` to watch the entire run, and `--profile-dir` to preserve a login profile.
 
 Always quote a DOI containing shell metacharacters such as parentheses or asterisks:
 

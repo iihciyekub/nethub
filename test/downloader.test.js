@@ -1,16 +1,69 @@
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs/promises');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { request } = require('playwright');
-const { downloadError, downloadWithRetry, safeFileName, savePdfFromContext, validatePdf } = require('../src/downloader.js');
+const {
+  downloadError, downloadOne, downloadWithRetry, isBlocked, safeFileName,
+  savePdfFromContext, validatePdf, waitForVerification,
+} = require('../src/downloader.js');
 
 test('safeFileName is portable and PDF validation rejects HTML', () => {
   assert.equal(safeFileName('10.1234/a:b*c?d'), '10.1234_a_b_c_d.pdf');
   assert.throws(() => validatePdf(Buffer.from('<html>'), 'text/html'), /not a PDF/);
   assert.doesNotThrow(() => validatePdf(Buffer.from('%PDF-1.7\nfixture'), 'application/pdf'));
+});
+
+test('verification detection recognizes human-check wording', async () => {
+  const page = {
+    title: async () => 'Please verify you are human',
+    locator: (selector) => selector === 'body'
+      ? { innerText: async () => 'Complete the security check' }
+      : { count: async () => 0 },
+    frames: () => [],
+  };
+  assert.equal(await isBlocked(page), true);
+});
+
+test('interactive verification waits for explicit terminal confirmation', async () => {
+  class Input extends EventEmitter { constructor() { super(); this.isTTY = true; } resume() {} }
+  const stdin = new Input();
+  const output = [];
+  const waiting = waitForVerification({}, 1000, '10.1000/check', {
+    stdin, stderr: { write: (value) => output.push(value) },
+  });
+  let settled = false;
+  waiting.finally(() => { settled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(settled, false);
+  stdin.emit('data', Buffer.from('\n'));
+  assert.equal(await waiting, true);
+  assert.match(output.join(''), /press Enter/);
+});
+
+test('missing PDF link escalates to one visible manual review', async () => {
+  let reviews = 0;
+  const page = {
+    goto: async () => ({ status: () => 200 }),
+    title: async () => 'Article',
+    locator: (selector) => selector === 'body'
+      ? { innerText: async () => 'Article page' }
+      : { count: async () => 0 },
+    frames: () => [],
+    waitForFunction: async () => { throw new Error('not found'); },
+    evaluate: async () => '',
+    url: () => 'https://example.test/article',
+    close: async () => {},
+  };
+  await assert.rejects(() => downloadOne({ newPage: async () => page }, '10.1000/missing', {
+    baseUrl: 'https://example.test', headless: true, timeout: 10, linkTimeout: 1,
+    verificationTimeout: 100, downloadDir: '/tmp',
+    verifyChallenge: async () => { reviews += 1; return true; },
+  }), (error) => error.code === 'PDF_LINK_NOT_FOUND');
+  assert.equal(reviews, 1);
 });
 
 test('context request follows redirects, reuses cookies, and atomically saves a PDF', async (t) => {
