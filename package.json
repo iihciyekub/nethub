@@ -1,6 +1,6 @@
 {
   "name": "nethub",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "description": "Browser-assisted DOI PDF downloader",
   "license": "MIT",
   "repository": {

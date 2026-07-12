@@ -209,9 +209,8 @@ async function waitForAutomaticVerification(page, timeout, signal, pollInterval 
 }
 
 async function waitForVerification(page, timeout, doi, io = process) {
-  io.stderr.write(`[${doi}] verification window is open for up to ${Math.round(timeout / 1000)} seconds.\n`);
   if (io.stdin?.isTTY) {
-    io.stderr.write(`[${doi}] complete verification in the browser; continuation is automatic, or press Enter to continue manually.\n`);
+    io.stderr.write(`[${doi}] complete browser verification within ${Math.round(timeout / 1000)}s; continuation is automatic, or press Enter.\n`);
     const controller = new AbortController();
     const automatic = waitForAutomaticVerification(
       page, timeout, controller.signal, io.pollInterval || 500, io.getObservedPdfUrl,
@@ -293,9 +292,16 @@ async function launchContext(settings, chromiumApi = chromium) {
 
 function createVerificationHandler(primaryContext, settings, chromiumApi = chromium) {
   let queue = Promise.resolve();
-  return (blockedPage, doi, reason = 'verification required') => {
+  return (blockedPage, doi, reason = 'verification required', statusWriter) => {
     const verify = async () => {
-      process.stderr.write(`[${doi}] ${reason}; opening a visible browser window.\n`);
+      const writeStatus = (message) => {
+        if (statusWriter) statusWriter(message);
+        else process.stderr.write(`${message}\n`);
+      };
+      const verificationStderr = statusWriter
+        ? { write: (value) => writeStatus(String(value).replace(/\n+$/, '')) }
+        : process.stderr;
+      writeStatus(`[${doi}] ${reason}; opening a visible browser window.`);
       const launch = {
         headless: false,
         args: [`--window-position=${settings.windowX},${settings.windowY}`, `--window-size=${settings.windowWidth},${settings.windowHeight}`],
@@ -326,7 +332,7 @@ function createVerificationHandler(primaryContext, settings, chromiumApi = chrom
         await positionWindow(verificationContext, page, { ...settings, headless: false });
         const navigation = await page.goto(blockedPage.url(), { waitUntil: 'domcontentloaded', timeout: settings.timeout }).catch(() => null);
         if (!await waitForVerification(page, settings.verificationTimeout, doi, {
-          stdin: process.stdin, stderr: process.stderr, getObservedPdfUrl: () => observedPdfUrl,
+          stdin: process.stdin, stderr: verificationStderr, getObservedPdfUrl: () => observedPdfUrl,
         })) return false;
         verifiedPdfUrl = await loadedVerificationPdfUrl(page, observedPdfUrl)
           || await loadedPdfUrl(page, navigation, observedPdfUrl);
@@ -410,7 +416,7 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
         throw downloadError('MANUAL_REVIEW_REQUIRED', 'human verification or login required');
       }
       const verification = settings.headless && settings.verifyChallenge
-        ? await settings.verifyChallenge(page, doi, 'human verification or login required')
+        ? await settings.verifyChallenge(page, doi, 'human verification or login required', settings.logStatus)
         : await waitForVerification(page, settings.verificationTimeout, doi, settings.verificationIo || process);
       if (!verificationPassed(verification)) throw downloadError('VERIFICATION_TIMEOUT', 'manual verification timed out');
       if (await saveVerifiedPdf(verification)) return { doi, ok: true, path: outputPath, source: source.name };
@@ -431,7 +437,7 @@ async function downloadOne(context, doi, settings, source = { name: 'default', b
         verificationAttempted = true;
         if (settings.deferManualReview) throw downloadError('MANUAL_REVIEW_REQUIRED', 'human verification or login required');
         const verification = settings.headless && settings.verifyChallenge
-          ? await settings.verifyChallenge(page, doi, 'human verification or login required')
+          ? await settings.verifyChallenge(page, doi, 'human verification or login required', settings.logStatus)
           : await waitForVerification(page, settings.verificationTimeout, doi, settings.verificationIo || process);
         if (verificationPassed(verification)) {
           if (await saveVerifiedPdf(verification)) return { doi, ok: true, path: outputPath, source: source.name };
@@ -471,11 +477,11 @@ async function downloadWithRetry(context, doi, settings, operation = downloadOne
       } catch (error) {
         if (error.retryable !== false) retryableSources.push(source);
         errors.push({ source: source.name, code: error.code || 'DOWNLOAD_FAILED', reason: error.message });
-        const message = error.code === 'MANUAL_REVIEW_REQUIRED'
-          ? `[${doi}] queued for manual review on source ${source.name}: ${error.message}`
-          : `[${doi}] source ${source.name}, attempt ${round + 1} failed: ${error.message}`;
-        const logFailure = settings.logFailure || ((value) => process.stderr.write(`${value}\n`));
-        logFailure(message);
+        if (error.code !== 'MANUAL_REVIEW_REQUIRED') {
+          const message = `[${doi}] source ${source.name}, attempt ${round + 1} failed: ${error.message}`;
+          const logFailure = settings.logFailure || ((value) => process.stderr.write(`${value}\n`));
+          logFailure(message);
+        }
       }
     }
     if (!retryableSources.length) break;
@@ -542,7 +548,8 @@ async function runBatch(context, dois, settings, operation = downloadOne) {
       active += 1;
       reportProgress();
       results[index] = await downloadWithRetry(context, dois[index], {
-        ...settings, deferManualReview: true, logFailure,
+      ...settings, deferManualReview: true, logFailure,
+      logStatus: logFailure,
       }, operation);
       active -= 1;
       processed += 1;
@@ -562,6 +569,7 @@ async function runBatch(context, dois, settings, operation = downloadOne) {
     const reviewed = await downloadWithRetry(context, dois[index], {
       ...settings, deferManualReview: false,
       logFailure,
+      logStatus: logFailure,
       sources: manualSources.length ? manualSources : configuredSources,
     }, operation);
     results[index] = {

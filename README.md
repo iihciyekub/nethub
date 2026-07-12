@@ -144,7 +144,7 @@ nethub update
 - `download-results.json`：请求、结果、实际下载源、失败原因和有效配置。
 - `failed-dois.txt`：每行一个失败 DOI，便于重新下载。
 
-默认使用分阶段自适应等待：网页导航最多 8 秒，动态 PDF 链接最多额外探测 2.5 秒；一旦链接出现就立即继续。确认 PDF 链接后，文件传输最多允许 60 秒，避免慢速网络把可下载文献误判为失败。每个下载源仍只尝试一次，明确的页面不存在、找不到 PDF 链接或返回内容不是 PDF 时不会重复尝试；所有来源均失败后，JSON 结果使用 `"status": "source_not_found"`。只有暂时性问题才允许通过 `--retries 1` 再试，额外重试轮数最多为 2。
+默认使用分阶段自适应等待：网页导航最多 8 秒，动态 PDF 链接最多额外探测 2.5 秒；一旦链接出现就立即继续。确认 PDF 链接后，文件传输最多允许 60 秒，避免慢速网络把可下载文献误判为失败。每个下载源仍只尝试一次，明确的页面不存在、找不到 PDF 链接或返回内容不是 PDF 时不会重复尝试；所有来源均失败后，JSON 结果使用 `"status": "source_not_found"`。只有暂时性问题才允许通过 `--retries 1` 再试，额外重试轮数最多为 2。批量任务只在单行进度中显示人工队列数量 `Manual N`，不会为每个待验证 DOI 重复刷屏；最后一个任务完成后会关闭浏览器、释放终端输入并立即退出。
 
 ## English
 
@@ -234,7 +234,7 @@ nethub update
 - `download-results.json` contains requested values, per-item status, selected source, errors, and effective settings.
 - `failed-dois.txt` contains one failed DOI per line for easy retries.
 
-The default mode uses staged adaptive limits: up to 8 seconds for page navigation and 2.5 seconds for a dynamically inserted PDF link, continuing immediately as soon as the link exists. Once a PDF link is confirmed, file transfer may take up to 60 seconds so a slow network does not turn an available document into a false failure. Each source is still attempted once. Definitive missing-page, missing-link, and non-PDF failures are not retried; exhausted results use `"status": "source_not_found"`. Extra retry rounds remain opt-in and capped at 2.
+The default mode uses staged adaptive limits: up to 8 seconds for page navigation and 2.5 seconds for a dynamically inserted PDF link, continuing immediately as soon as the link exists. Once a PDF link is confirmed, file transfer may take up to 60 seconds so a slow network does not turn an available document into a false failure. Each source is still attempted once. Definitive missing-page, missing-link, and non-PDF failures are not retried; exhausted results use `"status": "source_not_found"`. Extra retry rounds remain opt-in and capped at 2. Batch mode reports deferred verification only as `Manual N` in the single progress row instead of printing one queue message per DOI. After the final item it closes browsers, releases terminal input, and exits immediately.
 
 ## Development
 

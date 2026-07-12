@@ -485,10 +485,11 @@ test('manual reviews are deferred until background workers finish', async (t) =>
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'nethub-manual-queue-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const events = [];
+  const writes = [];
   const result = await runBatch({}, ['10.1/manual', '10.1/one', '10.1/two'], {
     downloadDir: directory, retries: 0, skipExisting: false, concurrency: 3,
     baseUrl: 'https://one.test', sources: [{ name: 'one', baseUrl: 'https://one.test' }],
-    progressStream: { isTTY: false, write: () => {} },
+    progressStream: { isTTY: false, write: (value) => writes.push(value) },
   }, async (_context, doi, settings) => {
     events.push(`${doi}:${settings.deferManualReview}`);
     if (doi.endsWith('/manual') && settings.deferManualReview) {
@@ -500,6 +501,24 @@ test('manual reviews are deferred until background workers finish', async (t) =>
   assert.ok(result.every((item) => item.ok));
   assert.equal(events.at(-1), '10.1/manual:false');
   assert.ok(events.indexOf('10.1/manual:false') > events.indexOf('10.1/two:true'));
+  assert.doesNotMatch(writes.join(''), /queued for manual review/);
+});
+
+test('deferred manual items stay in the single TTY progress row without queue spam', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'nethub-manual-progress-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const writes = [];
+  await runBatch({}, ['10.1/a', '10.1/b', '10.1/c'], {
+    downloadDir: directory, retries: 0, skipExisting: false, concurrency: 3,
+    baseUrl: 'https://one.test', sources: [{ name: 'one', baseUrl: 'https://one.test' }],
+    progressStream: { isTTY: true, write: (value) => writes.push(value) },
+  }, async (_context, doi, settings) => {
+    if (settings.deferManualReview) throw downloadError('MANUAL_REVIEW_REQUIRED', 'verification');
+    return { doi, ok: true, path: 'done' };
+  });
+  const output = writes.join('');
+  assert.doesNotMatch(output, /queued for manual review/);
+  assert.match(output, /Manual 3/);
 });
 
 test('stable batches adapt from three to four concurrent workers', async (t) => {

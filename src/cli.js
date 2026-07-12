@@ -92,7 +92,13 @@ async function main(argv, io = process) {
   const settings = resolveSettings(cli, config);
   const { requestedDois, invalidDois } = await collectDois(cli.positional, cli.inputs);
   if (requestedDois.length === 0) throw new Error('no valid DOI found in arguments or input files');
-  const payload = await downloadBatch(requestedDois, invalidDois, settings);
+  let payload;
+  try {
+    payload = await downloadBatch(requestedDois, invalidDois, settings);
+  } finally {
+    io.stdin?.pause?.();
+    io.stdin?.unref?.();
+  }
   if (settings.jsonOutput) io.stdout.write(`${JSON.stringify(payload)}\n`);
   else io.stdout.write(`Completed ${payload.results.length} request(s): ${payload.results.filter((item) => item.ok).length} successful, ${payload.results.filter((item) => item.status === 'source_not_found').length} source not found.\nResults: ${payload.summaryPath}\n`);
   return payload;
